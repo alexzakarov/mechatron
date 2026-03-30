@@ -1,0 +1,51 @@
+# Build directories
+build/
+build2/
+build_mingw/
+cmake-build-*/
+
+# IDE
+.idea/
+.vs/
+.vscode/
+*.user
+*.suo
+*.sln
+*.vcxproj*
+CMakeSettings.json
+
+# Compiled objects
+*.o
+*.obj
+*.lib
+*.a
+*.so
+*.dll
+*.exe
+*.pdb
+*.exp
+*.ilk
+
+# CMake generated
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+
+# vcpkg
+vcpkg/
+vcpkg_installed/
+
+# Temp/test artifacts
+*.hex
+*.stl
+*.obj
+imgui.ini
+temp_circuit.cir
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Claude Code
+.claude/

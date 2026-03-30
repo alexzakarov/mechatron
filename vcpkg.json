@@ -1,0 +1,19 @@
+{
+  "name": "mechatron",
+  "version": "0.1.0",
+  "description": "Universal mechatronics simulation platform combining mechanical, electronic, and software domains",
+  "license": "GPL-3.0-only",
+  "dependencies": [
+    "glfw3",
+    "glew",
+    {
+      "name": "imgui",
+      "features": ["opengl3-binding", "glfw-binding"]
+    },
+    "nlohmann-json",
+    "spdlog",
+    "gtest",
+    "glm",
+    "opencascade"
+  ]
+}

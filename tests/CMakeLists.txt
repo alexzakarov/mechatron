@@ -1,0 +1,23 @@
+add_executable(mechatron_tests
+    unit/test_time_manager.cpp
+    unit/test_event_bus.cpp
+    unit/test_subsystem.cpp
+    unit/test_project_file.cpp
+)
+
+target_link_libraries(mechatron_tests PRIVATE
+    mechatron_core
+    GTest::gtest
+    GTest::gtest_main
+)
+
+target_compile_features(mechatron_tests PRIVATE cxx_std_20)
+
+# MinGW: Don't link pthread explicitly (it's in libstdc++)
+if(MINGW)
+    target_link_options(mechatron_tests PRIVATE -Wl,--allow-multiple-definition)
+endif()
+
+# Disable test discovery during build (run manually)
+# include(GoogleTest)
+# gtest_discover_tests(mechatron_tests)
