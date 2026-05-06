@@ -2,9 +2,11 @@
 
 #include "core/Types.hpp"
 #include "core/Component.hpp"
+#include "core/Port.hpp"
 #include "physics/PhysicsWorld.hpp"
 #include <string>
 #include <cmath>
+#include <memory>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -28,10 +30,48 @@ public:
     void set_enabled(bool enabled) { m_enabled = enabled; }
     bool is_enabled() const { return m_enabled; }
 
+    // Port access for circuit integration
+    std::vector<Port*> get_ports() override {
+        std::vector<Port*> result;
+        if (m_power_port) result.push_back(m_power_port.get());
+        if (m_gnd_port) result.push_back(m_gnd_port.get());
+        if (m_signal_port) result.push_back(m_signal_port.get());
+        return result;
+    }
+
+    // Get input voltage from port
+    float get_input_voltage() const {
+        if (m_power_port) {
+            if (const float* val = m_power_port->get_value<float>()) {
+                return *val;
+            }
+        }
+        return m_input;
+    }
+
 protected:
     float m_input = 0.0f;      // Control input (0-1 or voltage)
     bool m_enabled = true;
     PhysicsBody* m_attached_body = nullptr;
+
+    // Ports for circuit integration
+    std::unique_ptr<Port> m_power_port;   // V+ / power input
+    std::unique_ptr<Port> m_gnd_port;     // Ground reference
+    std::unique_ptr<Port> m_signal_port;  // Control signal (PWM/enable)
+
+    // Helper to create standard actuator ports
+    void create_actuator_ports(bool has_signal = false) {
+        m_power_port = std::make_unique<Port>("V+", PortDomain::Electrical, PortDirection::Input);
+        m_power_port->set_value(0.0f);
+
+        m_gnd_port = std::make_unique<Port>("GND", PortDomain::Electrical, PortDirection::Input);
+        m_gnd_port->set_value(0.0f);
+
+        if (has_signal) {
+            m_signal_port = std::make_unique<Port>("SIG", PortDomain::Analog, PortDirection::Input);
+            m_signal_port->set_value(0.0f);
+        }
+    }
 };
 
 // Solenoid Actuator - electromechanical linear actuator

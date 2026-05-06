@@ -105,11 +105,54 @@ void ComponentRenderer::shutdown() {
     // Meshes cleaned up automatically
 }
 
+glm::mat4 ComponentRenderer::create_model_matrix(const Vec3& pos, const Vec3& scale, const Vec3& rotation) const {
+    glm::mat4 model = glm::mat4(1.0f);
+    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
+    // Apply rotation (Euler angles in radians: X, Y, Z order)
+    model = glm::rotate(model, rotation.x, glm::vec3(1, 0, 0));
+    model = glm::rotate(model, rotation.y, glm::vec3(0, 1, 0));
+    model = glm::rotate(model, rotation.z, glm::vec3(0, 0, 1));
+    model = glm::scale(model, glm::vec3(scale.x, scale.y, scale.z));
+    return model;
+}
+
+glm::mat4 ComponentRenderer::create_model_matrix_quat(const Vec3& pos, const Vec3& scale, const Quat& rotation) const {
+    glm::mat4 model = glm::mat4(1.0f);
+    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
+
+    // Convert quaternion to rotation matrix
+    // Quaternion q = (w, x, y, z)
+    // glm::mat4 is column-major, so we fill column by column
+    float w = rotation.w;
+    float x = rotation.x;
+    float y = rotation.y;
+    float z = rotation.z;
+
+    glm::mat4 rot = glm::mat4(1.0f);
+    // Column 0
+    rot[0][0] = 1.0f - 2.0f * (y * y + z * z);
+    rot[1][0] = 2.0f * (x * y + z * w);
+    rot[2][0] = 2.0f * (x * z - y * w);
+    // Column 1
+    rot[0][1] = 2.0f * (x * y - z * w);
+    rot[1][1] = 1.0f - 2.0f * (x * x + z * z);
+    rot[2][1] = 2.0f * (y * z + x * w);
+    // Column 2
+    rot[0][2] = 2.0f * (x * z + y * w);
+    rot[1][2] = 2.0f * (y * z - x * w);
+    rot[2][2] = 1.0f - 2.0f * (x * x + y * y);
+
+    model = model * rot;
+    model = glm::scale(model, glm::vec3(scale.x, scale.y, scale.z));
+    return model;
+}
+
 void ComponentRenderer::render_component(const Component& comp, const Camera& camera, float aspect) {
     const auto& t = comp.transform();
     bool selected = (comp.id() == m_selected_id);
 
-    Vec3 rotation{0, 0, 0}; // TODO: Add rotation to Transform
+    // Use quaternion rotation directly - no conversion to Euler needed
+    const Quat& rotation = t.rotation;
 
     // Route to appropriate renderer based on component type
     std::string_view type = comp.component_type();
@@ -305,10 +348,8 @@ void ComponentRenderer::render_all(const Camera& camera, float aspect) {
     });
 }
 
-void ComponentRenderer::render_dc_motor(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x, scale.y, scale.z));
+void ComponentRenderer::render_dc_motor(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
 
     // Motor body (cylinder)
     m_shader.set_uniform("uModel", model);
@@ -325,10 +366,8 @@ void ComponentRenderer::render_dc_motor(const Vec3& pos, const Vec3& scale, cons
     m_cylinder_mesh.draw();
 }
 
-void ComponentRenderer::render_servo_motor(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x, scale.y, scale.z));
+void ComponentRenderer::render_servo_motor(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
 
     // Servo body (box)
     m_shader.set_uniform("uModel", model);
@@ -345,10 +384,8 @@ void ComponentRenderer::render_servo_motor(const Vec3& pos, const Vec3& scale, c
     m_cylinder_mesh.draw();
 }
 
-void ComponentRenderer::render_solenoid(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x, scale.y, scale.z));
+void ComponentRenderer::render_solenoid(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
 
     // Coil (cylinder)
     m_shader.set_uniform("uModel", model);
@@ -365,10 +402,8 @@ void ComponentRenderer::render_solenoid(const Vec3& pos, const Vec3& scale, cons
     m_cylinder_mesh.draw();
 }
 
-void ComponentRenderer::render_encoder(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x, scale.y, scale.z));
+void ComponentRenderer::render_encoder(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
 
     // Disk (flattened cylinder)
     m_shader.set_uniform("uModel", model);
@@ -385,10 +420,9 @@ void ComponentRenderer::render_encoder(const Vec3& pos, const Vec3& scale, const
     m_cylinder_mesh.draw();
 }
 
-void ComponentRenderer::render_sensor_box(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.3f, scale.y * 0.3f, scale.z * 0.3f));
+void ComponentRenderer::render_sensor_box(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.3f, 0.3f, 0.3f));
 
     m_shader.set_uniform("uModel", model);
     m_shader.set_uniform("uColor", glm::vec3(m_color_sensor.x, m_color_sensor.y, m_color_sensor.z));
@@ -396,10 +430,9 @@ void ComponentRenderer::render_sensor_box(const Vec3& pos, const Vec3& scale, co
     m_box_mesh.draw();
 }
 
-void ComponentRenderer::render_generic_component(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.5f, scale.y * 0.5f, scale.z * 0.5f));
+void ComponentRenderer::render_generic_component(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.5f, 0.5f, 0.5f));
 
     m_shader.set_uniform("uModel", model);
     m_shader.set_uniform("uColor", glm::vec3(m_color_generic.x, m_color_generic.y, m_color_generic.z));
@@ -411,10 +444,8 @@ void ComponentRenderer::render_generic_component(const Vec3& pos, const Vec3& sc
 // MECHANICS - MACHINE ELEMENTS
 // ============================================================================
 
-void ComponentRenderer::render_stepper_motor(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x, scale.y, scale.z));
+void ComponentRenderer::render_stepper_motor(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
 
     // Motor body (box with square shape)
     m_shader.set_uniform("uModel", model);
@@ -431,10 +462,8 @@ void ComponentRenderer::render_stepper_motor(const Vec3& pos, const Vec3& scale,
     m_cylinder_mesh.draw();
 }
 
-void ComponentRenderer::render_linear_actuator(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x, scale.y, scale.z));
+void ComponentRenderer::render_linear_actuator(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
 
     // Cylinder body
     m_shader.set_uniform("uModel", model);
@@ -451,10 +480,9 @@ void ComponentRenderer::render_linear_actuator(const Vec3& pos, const Vec3& scal
     m_cylinder_mesh.draw();
 }
 
-void ComponentRenderer::render_gear(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected, int teeth) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x, scale.y * 0.3f, scale.z));
+void ComponentRenderer::render_gear(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected, int teeth) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(1.0f, 0.3f, 1.0f));
 
     m_shader.set_uniform("uModel", model);
     m_shader.set_uniform("uColor", glm::vec3(0.4f, 0.35f, 0.3f));
@@ -469,10 +497,9 @@ void ComponentRenderer::render_gear(const Vec3& pos, const Vec3& scale, const Ve
     m_cylinder_mesh.draw();
 }
 
-void ComponentRenderer::render_shaft(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.2f, scale.y, scale.z * 0.2f));
+void ComponentRenderer::render_shaft(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.2f, 1.0f, 0.2f));
 
     m_shader.set_uniform("uModel", model);
     m_shader.set_uniform("uColor", glm::vec3(0.6f, 0.6f, 0.6f));
@@ -480,10 +507,9 @@ void ComponentRenderer::render_shaft(const Vec3& pos, const Vec3& scale, const V
     m_cylinder_mesh.draw();
 }
 
-void ComponentRenderer::render_bearing(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x, scale.y * 0.3f, scale.z));
+void ComponentRenderer::render_bearing(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(1.0f, 0.3f, 1.0f));
 
     // Outer ring
     m_shader.set_uniform("uModel", model);
@@ -499,10 +525,9 @@ void ComponentRenderer::render_bearing(const Vec3& pos, const Vec3& scale, const
     m_cylinder_mesh.draw();
 }
 
-void ComponentRenderer::render_spring(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.3f, scale.y, scale.z * 0.3f));
+void ComponentRenderer::render_spring(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.3f, 1.0f, 0.3f));
 
     m_shader.set_uniform("uModel", model);
     m_shader.set_uniform("uColor", glm::vec3(0.7f, 0.7f, 0.2f));
@@ -510,10 +535,9 @@ void ComponentRenderer::render_spring(const Vec3& pos, const Vec3& scale, const 
     m_cylinder_mesh.draw();
 }
 
-void ComponentRenderer::render_damper(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.3f, scale.y, scale.z * 0.3f));
+void ComponentRenderer::render_damper(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.3f, 1.0f, 0.3f));
 
     // Cylinder body
     m_shader.set_uniform("uModel", model);
@@ -530,10 +554,9 @@ void ComponentRenderer::render_damper(const Vec3& pos, const Vec3& scale, const 
     m_cylinder_mesh.draw();
 }
 
-void ComponentRenderer::render_lead_screw(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.15f, scale.y, scale.z * 0.15f));
+void ComponentRenderer::render_lead_screw(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.15f, 1.0f, 0.15f));
 
     m_shader.set_uniform("uModel", model);
     m_shader.set_uniform("uColor", glm::vec3(0.5f, 0.5f, 0.5f));
@@ -541,10 +564,9 @@ void ComponentRenderer::render_lead_screw(const Vec3& pos, const Vec3& scale, co
     m_cylinder_mesh.draw();
 }
 
-void ComponentRenderer::render_pulley(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x, scale.y * 0.3f, scale.z));
+void ComponentRenderer::render_pulley(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(1.0f, 0.3f, 1.0f));
 
     m_shader.set_uniform("uModel", model);
     m_shader.set_uniform("uColor", glm::vec3(0.3f, 0.3f, 0.3f));
@@ -552,10 +574,9 @@ void ComponentRenderer::render_pulley(const Vec3& pos, const Vec3& scale, const 
     m_cylinder_mesh.draw();
 }
 
-void ComponentRenderer::render_belt(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x, scale.y * 0.05f, scale.z));
+void ComponentRenderer::render_belt(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(1.0f, 0.05f, 1.0f));
 
     m_shader.set_uniform("uModel", model);
     m_shader.set_uniform("uColor", glm::vec3(0.2f, 0.2f, 0.2f));
@@ -563,10 +584,9 @@ void ComponentRenderer::render_belt(const Vec3& pos, const Vec3& scale, const Ve
     m_box_mesh.draw();
 }
 
-void ComponentRenderer::render_cam(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x, scale.y * 0.3f, scale.z));
+void ComponentRenderer::render_cam(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(1.0f, 0.3f, 1.0f));
 
     m_shader.set_uniform("uModel", model);
     m_shader.set_uniform("uColor", glm::vec3(0.4f, 0.35f, 0.3f));
@@ -578,10 +598,9 @@ void ComponentRenderer::render_cam(const Vec3& pos, const Vec3& scale, const Vec
 // SENSORS
 // ============================================================================
 
-void ComponentRenderer::render_limit_switch(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.4f, scale.y * 0.3f, scale.z * 0.5f));
+void ComponentRenderer::render_limit_switch(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.4f, 0.3f, 0.5f));
 
     // Body
     m_shader.set_uniform("uModel", model);
@@ -598,10 +617,9 @@ void ComponentRenderer::render_limit_switch(const Vec3& pos, const Vec3& scale, 
     m_box_mesh.draw();
 }
 
-void ComponentRenderer::render_proximity_sensor(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.3f, scale.y * 0.4f, scale.z * 0.3f));
+void ComponentRenderer::render_proximity_sensor(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.3f, 0.4f, 0.3f));
 
     // Body
     m_shader.set_uniform("uModel", model);
@@ -618,10 +636,9 @@ void ComponentRenderer::render_proximity_sensor(const Vec3& pos, const Vec3& sca
     m_sphere_mesh.draw();
 }
 
-void ComponentRenderer::render_potentiometer(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.3f, scale.y * 0.2f, scale.z * 0.3f));
+void ComponentRenderer::render_potentiometer(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.3f, 0.2f, 0.3f));
 
     // Round body
     m_shader.set_uniform("uModel", model);
@@ -638,10 +655,9 @@ void ComponentRenderer::render_potentiometer(const Vec3& pos, const Vec3& scale,
     m_cylinder_mesh.draw();
 }
 
-void ComponentRenderer::render_load_cell(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.5f, scale.y * 0.2f, scale.z * 0.3f));
+void ComponentRenderer::render_load_cell(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.5f, 0.2f, 0.3f));
 
     m_shader.set_uniform("uModel", model);
     m_shader.set_uniform("uColor", glm::vec3(m_color_sensor.x, m_color_sensor.y, m_color_sensor.z));
@@ -649,10 +665,9 @@ void ComponentRenderer::render_load_cell(const Vec3& pos, const Vec3& scale, con
     m_box_mesh.draw();
 }
 
-void ComponentRenderer::render_accelerometer(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.2f, scale.y * 0.1f, scale.z * 0.2f));
+void ComponentRenderer::render_accelerometer(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.2f, 0.1f, 0.2f));
 
     m_shader.set_uniform("uModel", model);
     m_shader.set_uniform("uColor", glm::vec3(0.1f, 0.1f, 0.3f));
@@ -660,10 +675,9 @@ void ComponentRenderer::render_accelerometer(const Vec3& pos, const Vec3& scale,
     m_box_mesh.draw();
 }
 
-void ComponentRenderer::render_gyroscope(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.2f, scale.y * 0.1f, scale.z * 0.2f));
+void ComponentRenderer::render_gyroscope(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.2f, 0.1f, 0.2f));
 
     m_shader.set_uniform("uModel", model);
     m_shader.set_uniform("uColor", glm::vec3(0.3f, 0.1f, 0.1f));
@@ -671,10 +685,9 @@ void ComponentRenderer::render_gyroscope(const Vec3& pos, const Vec3& scale, con
     m_box_mesh.draw();
 }
 
-void ComponentRenderer::render_temperature_sensor(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.15f, scale.y * 0.3f, scale.z * 0.15f));
+void ComponentRenderer::render_temperature_sensor(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.15f, 0.3f, 0.15f));
 
     m_shader.set_uniform("uModel", model);
     m_shader.set_uniform("uColor", glm::vec3(0.2f, 0.2f, 0.2f));
@@ -682,10 +695,9 @@ void ComponentRenderer::render_temperature_sensor(const Vec3& pos, const Vec3& s
     m_cylinder_mesh.draw();
 }
 
-void ComponentRenderer::render_pressure_sensor(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.3f, scale.y * 0.2f, scale.z * 0.3f));
+void ComponentRenderer::render_pressure_sensor(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.3f, 0.2f, 0.3f));
 
     m_shader.set_uniform("uModel", model);
     m_shader.set_uniform("uColor", glm::vec3(m_color_sensor.x, m_color_sensor.y, m_color_sensor.z));
@@ -693,10 +705,9 @@ void ComponentRenderer::render_pressure_sensor(const Vec3& pos, const Vec3& scal
     m_box_mesh.draw();
 }
 
-void ComponentRenderer::render_flow_sensor(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.2f, scale.y * 0.5f, scale.z * 0.2f));
+void ComponentRenderer::render_flow_sensor(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.2f, 0.5f, 0.2f));
 
     m_shader.set_uniform("uModel", model);
     m_shader.set_uniform("uColor", glm::vec3(m_color_sensor.x, m_color_sensor.y, m_color_sensor.z));
@@ -708,10 +719,9 @@ void ComponentRenderer::render_flow_sensor(const Vec3& pos, const Vec3& scale, c
 // ELECTRONICS - PASSIVE
 // ============================================================================
 
-void ComponentRenderer::render_resistor(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.5f, scale.y * 0.15f, scale.z * 0.15f));
+void ComponentRenderer::render_resistor(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.5f, 0.15f, 0.15f));
 
     m_shader.set_uniform("uModel", model);
     m_shader.set_uniform("uColor", glm::vec3(0.7f, 0.5f, 0.3f));
@@ -719,10 +729,9 @@ void ComponentRenderer::render_resistor(const Vec3& pos, const Vec3& scale, cons
     m_cylinder_mesh.draw();
 }
 
-void ComponentRenderer::render_capacitor(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.2f, scale.y * 0.4f, scale.z * 0.2f));
+void ComponentRenderer::render_capacitor(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.2f, 0.4f, 0.2f));
 
     m_shader.set_uniform("uModel", model);
     m_shader.set_uniform("uColor", glm::vec3(0.2f, 0.4f, 0.7f));
@@ -730,10 +739,9 @@ void ComponentRenderer::render_capacitor(const Vec3& pos, const Vec3& scale, con
     m_cylinder_mesh.draw();
 }
 
-void ComponentRenderer::render_inductor(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.25f, scale.y * 0.3f, scale.z * 0.25f));
+void ComponentRenderer::render_inductor(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.25f, 0.3f, 0.25f));
 
     m_shader.set_uniform("uModel", model);
     m_shader.set_uniform("uColor", glm::vec3(0.4f, 0.2f, 0.2f));
@@ -741,10 +749,9 @@ void ComponentRenderer::render_inductor(const Vec3& pos, const Vec3& scale, cons
     m_cylinder_mesh.draw();
 }
 
-void ComponentRenderer::render_transformer(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.4f, scale.y * 0.3f, scale.z * 0.4f));
+void ComponentRenderer::render_transformer(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.4f, 0.3f, 0.4f));
 
     // Core
     m_shader.set_uniform("uModel", model);
@@ -773,10 +780,9 @@ void ComponentRenderer::render_transformer(const Vec3& pos, const Vec3& scale, c
 // ELECTRONICS - SEMICONDUCTOR
 // ============================================================================
 
-void ComponentRenderer::render_diode(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.3f, scale.y * 0.1f, scale.z * 0.15f));
+void ComponentRenderer::render_diode(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.3f, 0.1f, 0.15f));
 
     m_shader.set_uniform("uModel", model);
     m_shader.set_uniform("uColor", glm::vec3(0.2f, 0.2f, 0.2f));
@@ -784,10 +790,9 @@ void ComponentRenderer::render_diode(const Vec3& pos, const Vec3& scale, const V
     m_cylinder_mesh.draw();
 }
 
-void ComponentRenderer::render_led(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.2f, scale.y * 0.15f, scale.z * 0.2f));
+void ComponentRenderer::render_led(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.2f, 0.15f, 0.2f));
 
     // Body
     m_shader.set_uniform("uModel", model);
@@ -796,10 +801,9 @@ void ComponentRenderer::render_led(const Vec3& pos, const Vec3& scale, const Vec
     m_sphere_mesh.draw();
 }
 
-void ComponentRenderer::render_bjt(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.2f, scale.y * 0.15f, scale.z * 0.2f));
+void ComponentRenderer::render_bjt(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.2f, 0.15f, 0.2f));
 
     m_shader.set_uniform("uModel", model);
     m_shader.set_uniform("uColor", glm::vec3(0.2f, 0.2f, 0.2f));
@@ -807,10 +811,9 @@ void ComponentRenderer::render_bjt(const Vec3& pos, const Vec3& scale, const Vec
     m_box_mesh.draw();
 }
 
-void ComponentRenderer::render_mosfet(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.25f, scale.y * 0.1f, scale.z * 0.2f));
+void ComponentRenderer::render_mosfet(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.25f, 0.1f, 0.2f));
 
     m_shader.set_uniform("uModel", model);
     m_shader.set_uniform("uColor", glm::vec3(0.2f, 0.2f, 0.2f));
@@ -818,10 +821,9 @@ void ComponentRenderer::render_mosfet(const Vec3& pos, const Vec3& scale, const 
     m_box_mesh.draw();
 }
 
-void ComponentRenderer::render_igbt(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.25f, scale.y * 0.12f, scale.z * 0.2f));
+void ComponentRenderer::render_igbt(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.25f, 0.12f, 0.2f));
 
     m_shader.set_uniform("uModel", model);
     m_shader.set_uniform("uColor", glm::vec3(0.2f, 0.2f, 0.2f));
@@ -829,10 +831,9 @@ void ComponentRenderer::render_igbt(const Vec3& pos, const Vec3& scale, const Ve
     m_box_mesh.draw();
 }
 
-void ComponentRenderer::render_thyristor(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.2f, scale.y * 0.15f, scale.z * 0.15f));
+void ComponentRenderer::render_thyristor(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.2f, 0.15f, 0.15f));
 
     m_shader.set_uniform("uModel", model);
     m_shader.set_uniform("uColor", glm::vec3(0.2f, 0.2f, 0.2f));
@@ -840,10 +841,9 @@ void ComponentRenderer::render_thyristor(const Vec3& pos, const Vec3& scale, con
     m_box_mesh.draw();
 }
 
-void ComponentRenderer::render_voltage_regulator(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.3f, scale.y * 0.15f, scale.z * 0.25f));
+void ComponentRenderer::render_voltage_regulator(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.3f, 0.15f, 0.25f));
 
     m_shader.set_uniform("uModel", model);
     m_shader.set_uniform("uColor", glm::vec3(0.1f, 0.1f, 0.1f));
@@ -851,10 +851,9 @@ void ComponentRenderer::render_voltage_regulator(const Vec3& pos, const Vec3& sc
     m_box_mesh.draw();
 }
 
-void ComponentRenderer::render_op_amp(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.25f, scale.y * 0.15f, scale.z * 0.2f));
+void ComponentRenderer::render_op_amp(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.25f, 0.15f, 0.2f));
 
     m_shader.set_uniform("uModel", model);
     m_shader.set_uniform("uColor", glm::vec3(0.1f, 0.1f, 0.1f));
@@ -866,10 +865,9 @@ void ComponentRenderer::render_op_amp(const Vec3& pos, const Vec3& scale, const 
 // ELECTRONICS - POWER
 // ============================================================================
 
-void ComponentRenderer::render_h_bridge(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.5f, scale.y * 0.2f, scale.z * 0.4f));
+void ComponentRenderer::render_h_bridge(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.5f, 0.2f, 0.4f));
 
     // Heat sink base
     m_shader.set_uniform("uModel", model);
@@ -888,10 +886,9 @@ void ComponentRenderer::render_h_bridge(const Vec3& pos, const Vec3& scale, cons
     }
 }
 
-void ComponentRenderer::render_buck_converter(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.4f, scale.y * 0.15f, scale.z * 0.3f));
+void ComponentRenderer::render_buck_converter(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.4f, 0.15f, 0.3f));
 
     // PCB
     m_shader.set_uniform("uModel", model);
@@ -908,10 +905,9 @@ void ComponentRenderer::render_buck_converter(const Vec3& pos, const Vec3& scale
     m_cylinder_mesh.draw();
 }
 
-void ComponentRenderer::render_boost_converter(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.4f, scale.y * 0.15f, scale.z * 0.3f));
+void ComponentRenderer::render_boost_converter(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.4f, 0.15f, 0.3f));
 
     m_shader.set_uniform("uModel", model);
     m_shader.set_uniform("uColor", glm::vec3(0.1f, 0.3f, 0.1f));
@@ -919,10 +915,9 @@ void ComponentRenderer::render_boost_converter(const Vec3& pos, const Vec3& scal
     m_box_mesh.draw();
 }
 
-void ComponentRenderer::rectifier(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.4f, scale.y * 0.15f, scale.z * 0.3f));
+void ComponentRenderer::rectifier(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.4f, 0.15f, 0.3f));
 
     m_shader.set_uniform("uModel", model);
     m_shader.set_uniform("uColor", glm::vec3(0.1f, 0.1f, 0.1f));
@@ -930,10 +925,9 @@ void ComponentRenderer::rectifier(const Vec3& pos, const Vec3& scale, const Vec3
     m_box_mesh.draw();
 }
 
-void ComponentRenderer::render_motor_driver(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.5f, scale.y * 0.15f, scale.z * 0.4f));
+void ComponentRenderer::render_motor_driver(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.5f, 0.15f, 0.4f));
 
     m_shader.set_uniform("uModel", model);
     m_shader.set_uniform("uColor", glm::vec3(0.1f, 0.1f, 0.1f));
@@ -941,10 +935,9 @@ void ComponentRenderer::render_motor_driver(const Vec3& pos, const Vec3& scale, 
     m_box_mesh.draw();
 }
 
-void ComponentRenderer::render_relay(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.4f, scale.y * 0.2f, scale.z * 0.3f));
+void ComponentRenderer::render_relay(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.4f, 0.2f, 0.3f));
 
     // Cube body
     m_shader.set_uniform("uModel", model);
@@ -957,10 +950,9 @@ void ComponentRenderer::render_relay(const Vec3& pos, const Vec3& scale, const V
 // ELECTRONICS - DIGITAL/ACTIVE
 // ============================================================================
 
-void ComponentRenderer::render_logic_gate(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.2f, scale.y * 0.1f, scale.z * 0.15f));
+void ComponentRenderer::render_logic_gate(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.2f, 0.1f, 0.15f));
 
     m_shader.set_uniform("uModel", model);
     m_shader.set_uniform("uColor", glm::vec3(0.1f, 0.1f, 0.1f));
@@ -968,10 +960,9 @@ void ComponentRenderer::render_logic_gate(const Vec3& pos, const Vec3& scale, co
     m_box_mesh.draw();
 }
 
-void ComponentRenderer::render_microcontroller(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.5f, scale.y * 0.1f, scale.z * 0.5f));
+void ComponentRenderer::render_microcontroller(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.5f, 0.1f, 0.5f));
 
     // Chip body
     m_shader.set_uniform("uModel", model);
@@ -980,10 +971,9 @@ void ComponentRenderer::render_microcontroller(const Vec3& pos, const Vec3& scal
     m_box_mesh.draw();
 }
 
-void ComponentRenderer::render_adc_dac(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.3f, scale.y * 0.1f, scale.z * 0.3f));
+void ComponentRenderer::render_adc_dac(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.3f, 0.1f, 0.3f));
 
     m_shader.set_uniform("uModel", model);
     m_shader.set_uniform("uColor", glm::vec3(0.1f, 0.1f, 0.1f));
@@ -991,10 +981,9 @@ void ComponentRenderer::render_adc_dac(const Vec3& pos, const Vec3& scale, const
     m_box_mesh.draw();
 }
 
-void ComponentRenderer::render_display(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.6f, scale.y * 0.05f, scale.z * 0.4f));
+void ComponentRenderer::render_display(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.6f, 0.05f, 0.4f));
 
     m_shader.set_uniform("uModel", model);
     m_shader.set_uniform("uColor", glm::vec3(0.1f, 0.1f, 0.2f)); // Blue tint
@@ -1002,10 +991,9 @@ void ComponentRenderer::render_display(const Vec3& pos, const Vec3& scale, const
     m_box_mesh.draw();
 }
 
-void ComponentRenderer::render_connector(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.2f, scale.y * 0.1f, scale.z * 0.4f));
+void ComponentRenderer::render_connector(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.2f, 0.1f, 0.4f));
 
     m_shader.set_uniform("uModel", model);
     m_shader.set_uniform("uColor", glm::vec3(0.1f, 0.1f, 0.1f));
@@ -1013,10 +1001,9 @@ void ComponentRenderer::render_connector(const Vec3& pos, const Vec3& scale, con
     m_box_mesh.draw();
 }
 
-void ComponentRenderer::render_terminal_block(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.4f, scale.y * 0.15f, scale.z * 0.2f));
+void ComponentRenderer::render_terminal_block(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.4f, 0.15f, 0.2f));
 
     // Green terminal block
     m_shader.set_uniform("uModel", model);
@@ -1025,10 +1012,9 @@ void ComponentRenderer::render_terminal_block(const Vec3& pos, const Vec3& scale
     m_box_mesh.draw();
 }
 
-void ComponentRenderer::render_pcb(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x, scale.y * 0.05f, scale.z));
+void ComponentRenderer::render_pcb(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(1.0f, 0.05f, 1.0f));
 
     m_shader.set_uniform("uModel", model);
     m_shader.set_uniform("uColor", glm::vec3(0.1f, 0.3f, 0.1f)); // Green PCB
@@ -1040,10 +1026,9 @@ void ComponentRenderer::render_pcb(const Vec3& pos, const Vec3& scale, const Vec
 // SOFTWARE/MCU BOARDS
 // ============================================================================
 
-void ComponentRenderer::render_arduino_uno(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.7f, scale.y * 0.05f, scale.z * 0.5f));
+void ComponentRenderer::render_arduino_uno(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.7f, 0.05f, 0.5f));
 
     // Blue PCB
     m_shader.set_uniform("uModel", model);
@@ -1068,10 +1053,9 @@ void ComponentRenderer::render_arduino_uno(const Vec3& pos, const Vec3& scale, c
     m_box_mesh.draw();
 }
 
-void ComponentRenderer::render_arduino_mega(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x, scale.y * 0.05f, scale.z * 0.7f));
+void ComponentRenderer::render_arduino_mega(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(1.0f, 0.05f, 0.7f));
 
     m_shader.set_uniform("uModel", model);
     m_shader.set_uniform("uColor", glm::vec3(0.1f, 0.3f, 0.5f));
@@ -1079,10 +1063,9 @@ void ComponentRenderer::render_arduino_mega(const Vec3& pos, const Vec3& scale, 
     m_box_mesh.draw();
 }
 
-void ComponentRenderer::render_stm32_board(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.5f, scale.y * 0.05f, scale.z * 0.7f));
+void ComponentRenderer::render_stm32_board(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.5f, 0.05f, 0.7f));
 
     m_shader.set_uniform("uModel", model);
     m_shader.set_uniform("uColor", glm::vec3(0.2f, 0.2f, 0.2f));
@@ -1098,10 +1081,9 @@ void ComponentRenderer::render_stm32_board(const Vec3& pos, const Vec3& scale, c
     m_box_mesh.draw();
 }
 
-void ComponentRenderer::render_esp32_board(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.4f, scale.y * 0.05f, scale.z * 0.5f));
+void ComponentRenderer::render_esp32_board(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.4f, 0.05f, 0.5f));
 
     m_shader.set_uniform("uModel", model);
     m_shader.set_uniform("uColor", glm::vec3(0.1f, 0.1f, 0.1f));
@@ -1117,10 +1099,9 @@ void ComponentRenderer::render_esp32_board(const Vec3& pos, const Vec3& scale, c
     m_box_mesh.draw();
 }
 
-void ComponentRenderer::render_raspberry_pi(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.6f, scale.y * 0.05f, scale.z * 0.5f));
+void ComponentRenderer::render_raspberry_pi(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.6f, 0.05f, 0.5f));
 
     // Green PCB
     m_shader.set_uniform("uModel", model);
@@ -1141,10 +1122,9 @@ void ComponentRenderer::render_raspberry_pi(const Vec3& pos, const Vec3& scale, 
 // FLUID POWER
 // ============================================================================
 
-void ComponentRenderer::render_hydraulic_cylinder(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.3f, scale.y, scale.z * 0.3f));
+void ComponentRenderer::render_hydraulic_cylinder(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.3f, 1.0f, 0.3f));
 
     // Cylinder body
     m_shader.set_uniform("uModel", model);
@@ -1161,10 +1141,9 @@ void ComponentRenderer::render_hydraulic_cylinder(const Vec3& pos, const Vec3& s
     m_cylinder_mesh.draw();
 }
 
-void ComponentRenderer::render_hydraulic_pump(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.4f, scale.y * 0.3f, scale.z * 0.4f));
+void ComponentRenderer::render_hydraulic_pump(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.4f, 0.3f, 0.4f));
 
     m_shader.set_uniform("uModel", model);
     m_shader.set_uniform("uColor", glm::vec3(0.3f, 0.3f, 0.3f));
@@ -1172,10 +1151,9 @@ void ComponentRenderer::render_hydraulic_pump(const Vec3& pos, const Vec3& scale
     m_box_mesh.draw();
 }
 
-void ComponentRenderer::render_pneumatic_valve(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.3f, scale.y * 0.2f, scale.z * 0.3f));
+void ComponentRenderer::render_pneumatic_valve(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.3f, 0.2f, 0.3f));
 
     m_shader.set_uniform("uModel", model);
     m_shader.set_uniform("uColor", glm::vec3(0.2f, 0.2f, 0.2f));
@@ -1183,10 +1161,9 @@ void ComponentRenderer::render_pneumatic_valve(const Vec3& pos, const Vec3& scal
     m_box_mesh.draw();
 }
 
-void ComponentRenderer::render_compressor(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.4f, scale.y * 0.4f, scale.z * 0.4f));
+void ComponentRenderer::render_compressor(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.4f, 0.4f, 0.4f));
 
     // Tank body
     m_shader.set_uniform("uModel", model);
@@ -1195,10 +1172,9 @@ void ComponentRenderer::render_compressor(const Vec3& pos, const Vec3& scale, co
     m_cylinder_mesh.draw();
 }
 
-void ComponentRenderer::render_filter(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.2f, scale.y * 0.3f, scale.z * 0.2f));
+void ComponentRenderer::render_filter(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.2f, 0.3f, 0.2f));
 
     m_shader.set_uniform("uModel", model);
     m_shader.set_uniform("uColor", glm::vec3(0.6f, 0.5f, 0.3f));
@@ -1206,10 +1182,9 @@ void ComponentRenderer::render_filter(const Vec3& pos, const Vec3& scale, const 
     m_cylinder_mesh.draw();
 }
 
-void ComponentRenderer::render_accumulator(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.25f, scale.y * 0.5f, scale.z * 0.25f));
+void ComponentRenderer::render_accumulator(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.25f, 0.5f, 0.25f));
 
     m_shader.set_uniform("uModel", model);
     m_shader.set_uniform("uColor", glm::vec3(0.3f, 0.3f, 0.3f));
@@ -1217,10 +1192,9 @@ void ComponentRenderer::render_accumulator(const Vec3& pos, const Vec3& scale, c
     m_cylinder_mesh.draw();
 }
 
-void ComponentRenderer::render_hose(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.1f, scale.y, scale.z * 0.1f));
+void ComponentRenderer::render_hose(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.1f, 1.0f, 0.1f));
 
     m_shader.set_uniform("uModel", model);
     m_shader.set_uniform("uColor", glm::vec3(0.2f, 0.2f, 0.2f));
@@ -1232,10 +1206,9 @@ void ComponentRenderer::render_hose(const Vec3& pos, const Vec3& scale, const Ve
 // MULTIPHYSICS - THERMAL
 // ============================================================================
 
-void ComponentRenderer::render_heat_source(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.3f, scale.y * 0.2f, scale.z * 0.3f));
+void ComponentRenderer::render_heat_source(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.3f, 0.2f, 0.3f));
 
     m_shader.set_uniform("uModel", model);
     m_shader.set_uniform("uColor", glm::vec3(0.8f, 0.3f, 0.1f)); // Red for heat
@@ -1243,10 +1216,9 @@ void ComponentRenderer::render_heat_source(const Vec3& pos, const Vec3& scale, c
     m_box_mesh.draw();
 }
 
-void ComponentRenderer::render_heat_sink(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.3f, scale.y * 0.2f, scale.z * 0.3f));
+void ComponentRenderer::render_heat_sink(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.3f, 0.2f, 0.3f));
 
     // Base plate
     m_shader.set_uniform("uModel", model);
@@ -1265,10 +1237,9 @@ void ComponentRenderer::render_heat_sink(const Vec3& pos, const Vec3& scale, con
     }
 }
 
-void ComponentRenderer::render_thermal_resistance(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.3f, scale.y * 0.1f, scale.z * 0.3f));
+void ComponentRenderer::render_thermal_resistance(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.3f, 0.1f, 0.3f));
 
     m_shader.set_uniform("uModel", model);
     m_shader.set_uniform("uColor", glm::vec3(0.6f, 0.4f, 0.2f));
@@ -1276,10 +1247,9 @@ void ComponentRenderer::render_thermal_resistance(const Vec3& pos, const Vec3& s
     m_box_mesh.draw();
 }
 
-void ComponentRenderer::render_fan(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.4f, scale.y * 0.1f, scale.z * 0.4f));
+void ComponentRenderer::render_fan(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.4f, 0.1f, 0.4f));
 
     // Fan frame
     m_shader.set_uniform("uModel", model);
@@ -1296,10 +1266,9 @@ void ComponentRenderer::render_fan(const Vec3& pos, const Vec3& scale, const Vec
     m_cylinder_mesh.draw();
 }
 
-void ComponentRenderer::render_thermoelectric_cooler(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.25f, scale.y * 0.1f, scale.z * 0.25f));
+void ComponentRenderer::render_thermoelectric_cooler(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.25f, 0.1f, 0.25f));
 
     // Ceramic plates
     m_shader.set_uniform("uModel", model);
@@ -1312,10 +1281,9 @@ void ComponentRenderer::render_thermoelectric_cooler(const Vec3& pos, const Vec3
 // MULTIPHYSICS - MAGNETIC
 // ============================================================================
 
-void ComponentRenderer::render_permanent_magnet(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.3f, scale.y * 0.2f, scale.z * 0.3f));
+void ComponentRenderer::render_permanent_magnet(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.3f, 0.2f, 0.3f));
 
     m_shader.set_uniform("uModel", model);
     m_shader.set_uniform("uColor", glm::vec3(0.2f, 0.2f, 0.4f)); // Dark blue for magnet
@@ -1323,10 +1291,9 @@ void ComponentRenderer::render_permanent_magnet(const Vec3& pos, const Vec3& sca
     m_box_mesh.draw();
 }
 
-void ComponentRenderer::render_electromagnet(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.3f, scale.y * 0.3f, scale.z * 0.3f));
+void ComponentRenderer::render_electromagnet(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.3f, 0.3f, 0.3f));
 
     // Copper coil
     m_shader.set_uniform("uModel", model);
@@ -1342,10 +1309,9 @@ void ComponentRenderer::render_electromagnet(const Vec3& pos, const Vec3& scale,
     m_cylinder_mesh.draw();
 }
 
-void ComponentRenderer::render_magnetic_core(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.4f, scale.y * 0.15f, scale.z * 0.4f));
+void ComponentRenderer::render_magnetic_core(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.4f, 0.15f, 0.4f));
 
     m_shader.set_uniform("uModel", model);
     m_shader.set_uniform("uColor", glm::vec3(0.3f, 0.3f, 0.3f));
@@ -1353,10 +1319,9 @@ void ComponentRenderer::render_magnetic_core(const Vec3& pos, const Vec3& scale,
     m_box_mesh.draw();
 }
 
-void ComponentRenderer::render_solenoid_coil(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.3f, scale.y * 0.3f, scale.z * 0.3f));
+void ComponentRenderer::render_solenoid_coil(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.3f, 0.3f, 0.3f));
 
     m_shader.set_uniform("uModel", model);
     m_shader.set_uniform("uColor", glm::vec3(0.7f, 0.4f, 0.2f)); // Copper color
@@ -1368,10 +1333,9 @@ void ComponentRenderer::render_solenoid_coil(const Vec3& pos, const Vec3& scale,
 // ROBOTICS
 // ============================================================================
 
-void ComponentRenderer::render_robot_link(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.2f, scale.y, scale.z * 0.2f));
+void ComponentRenderer::render_robot_link(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.2f, 1.0f, 0.2f));
 
     m_shader.set_uniform("uModel", model);
     m_shader.set_uniform("uColor", glm::vec3(0.4f, 0.4f, 0.4f));
@@ -1379,10 +1343,9 @@ void ComponentRenderer::render_robot_link(const Vec3& pos, const Vec3& scale, co
     m_cylinder_mesh.draw();
 }
 
-void ComponentRenderer::render_robot_joint(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.3f, scale.y * 0.2f, scale.z * 0.3f));
+void ComponentRenderer::render_robot_joint(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.3f, 0.2f, 0.3f));
 
     m_shader.set_uniform("uModel", model);
     m_shader.set_uniform("uColor", glm::vec3(0.3f, 0.3f, 0.3f));
@@ -1390,10 +1353,9 @@ void ComponentRenderer::render_robot_joint(const Vec3& pos, const Vec3& scale, c
     m_sphere_mesh.draw();
 }
 
-void ComponentRenderer::render_end_effector(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.3f, scale.y * 0.2f, scale.z * 0.3f));
+void ComponentRenderer::render_end_effector(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.3f, 0.2f, 0.3f));
 
     m_shader.set_uniform("uModel", model);
     m_shader.set_uniform("uColor", glm::vec3(0.5f, 0.5f, 0.5f));
@@ -1401,10 +1363,9 @@ void ComponentRenderer::render_end_effector(const Vec3& pos, const Vec3& scale, 
     m_box_mesh.draw();
 }
 
-void ComponentRenderer::render_gripper(const Vec3& pos, const Vec3& scale, const Vec3& rotation, bool selected) {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, glm::vec3(pos.x, pos.y, pos.z));
-    model = glm::scale(model, glm::vec3(scale.x * 0.3f, scale.y * 0.15f, scale.z * 0.3f));
+void ComponentRenderer::render_gripper(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.3f, 0.15f, 0.3f));
 
     // Base
     m_shader.set_uniform("uModel", model);
@@ -1426,6 +1387,16 @@ void ComponentRenderer::render_gripper(const Vec3& pos, const Vec3& scale, const
     right_model = glm::scale(right_model, glm::vec3(0.3f, 0.5f, 0.3f));
     m_shader.set_uniform("uModel", right_model);
     m_shader.set_uniform("uColor", glm::vec3(0.2f, 0.2f, 0.2f));
+    m_box_mesh.draw();
+}
+
+void ComponentRenderer::render_potentiometer_trimpot(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    model = glm::scale(model, glm::vec3(0.2f, 0.15f, 0.2f));
+
+    m_shader.set_uniform("uModel", model);
+    m_shader.set_uniform("uColor", glm::vec3(0.2f, 0.2f, 0.2f));
+    m_shader.set_uniform("uSelected", selected ? 1 : 0);
     m_box_mesh.draw();
 }
 

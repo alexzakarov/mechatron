@@ -258,6 +258,60 @@ target_link_libraries(ngspice_hbridge_demo
         multi_magnetic_lib
 )
 
+add_executable(test_circuit_ports
+    ../tests/test_circuit_ports.cpp
+)
+
+target_link_libraries(test_circuit_ports
+    PRIVATE
+        mechatron_electronics
+        mechatron_core
+        mech_machine_elements_lib
+        elec_passive_lib
+        elec_semiconductor_lib
+        elec_power_lib
+        soft_mcu_avr_lib
+        soft_control_lib
+        multi_thermal_lib
+        multi_magnetic_lib
+)
+
+add_executable(mna_test
+    mna_test.cpp
+)
+
+target_link_libraries(mna_test
+    PRIVATE
+        mechatron_electronics
+        mechatron_core
+        mech_machine_elements_lib
+        elec_passive_lib
+        elec_semiconductor_lib
+        elec_power_lib
+        soft_mcu_avr_lib
+        soft_control_lib
+        multi_thermal_lib
+        multi_magnetic_lib
+)
+
+add_executable(ui_esc_test
+    ui_esc_test.cpp
+)
+
+target_link_libraries(ui_esc_test
+    PRIVATE
+        mechatron_electronics
+        mechatron_core
+        mech_machine_elements_lib
+        elec_passive_lib
+        elec_semiconductor_lib
+        elec_power_lib
+        soft_mcu_avr_lib
+        soft_control_lib
+        multi_thermal_lib
+        multi_magnetic_lib
+)
+
 # MinGW pthread fix
 if(MINGW)
     target_link_options(physics_demo PRIVATE -Wl,--allow-multiple-definition)
@@ -274,4 +328,7 @@ if(MINGW)
     target_link_options(mcu_advanced_demo PRIVATE -Wl,--allow-multiple-definition)
     target_link_options(motor_pid_demo PRIVATE -Wl,--allow-multiple-definition)
     target_link_options(ngspice_hbridge_demo PRIVATE -Wl,--allow-multiple-definition)
+    target_link_options(test_circuit_ports PRIVATE -Wl,--allow-multiple-definition)
+    target_link_options(mna_test PRIVATE -Wl,--allow-multiple-definition)
+    target_link_options(ui_esc_test PRIVATE -Wl,--allow-multiple-definition)
 endif()

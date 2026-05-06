@@ -21,3 +21,16 @@ endif()
 # Disable test discovery during build (run manually)
 # include(GoogleTest)
 # gtest_discover_tests(mechatron_tests)
+
+# Circuit port tests (standalone, no GTest)
+add_executable(test_circuit_ports
+    test_circuit_ports.cpp
+)
+
+target_link_libraries(test_circuit_ports PRIVATE
+    mechatron_electronics
+    mechatron_core
+    spdlog::spdlog
+)
+
+target_compile_features(test_circuit_ports PRIVATE cxx_std_20)

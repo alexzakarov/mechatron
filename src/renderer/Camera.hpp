@@ -18,6 +18,7 @@ public:
 
     Vec3 position() const { return m_position; }
     Vec3 target() const { return m_target; }
+    float fov() const { return m_fov; }
 
     void set_fov(float fov) { m_fov = fov; }
     void set_near_far(float near, float far) { m_near = near; m_far = far; }

@@ -25,7 +25,7 @@ bool UIApplication::init() {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
-    m_window = glfwCreateWindow(1600, 900, "MECHATRON - Simulation Engine", nullptr, nullptr);
+    m_window = glfwCreateWindow(1280, 720, "MECHATRON - Simulation Engine", nullptr, nullptr);
     if (!m_window) {
         spdlog::error("Failed to create GLFW window");
         glfwTerminate();
@@ -181,73 +181,69 @@ void UIApplication::run() {
 void UIApplication::render_component_tree() {
     ImGui::Begin("Scene");
 
-    // Add Component Menu
+    // Add Component Menu (dynamically populated from all loaded plugins)
     if (ImGui::Button("Add Component")) {
         ImGui::OpenPopup("AddComponentPopup");
     }
 
     if (ImGui::BeginPopup("AddComponentPopup")) {
-        ImGui::TextDisabled("Actuators");
-        if (ImGui::MenuItem("Solenoid")) {
-            static int solenoid_count = 0;
-            std::string id = "solenoid_" + std::to_string(++solenoid_count);
-            if (auto* comp = m_orchestrator->create_component("mech_machine_elements", "solenoid_actuator", id)) {
-                comp->transform().position = {0, solenoid_count * 2.0f, 0};
-                spdlog::info("Added solenoid: {}", id);
-            }
-        }
-        if (ImGui::MenuItem("DC Motor")) {
-            static int motor_count = 0;
-            std::string id = "dc_motor_" + std::to_string(++motor_count);
-            if (auto* comp = m_orchestrator->create_component("mech_machine_elements", "dc_motor", id)) {
-                comp->transform().position = {0, motor_count * 2.0f, 0};
-                spdlog::info("Added DC motor: {}", id);
-            }
-        }
-        if (ImGui::MenuItem("Servo Motor")) {
-            static int servo_count = 0;
-            std::string id = "servo_" + std::to_string(++servo_count);
-            if (auto* comp = m_orchestrator->create_component("mech_machine_elements", "servo_motor", id)) {
-                comp->transform().position = {0, servo_count * 2.0f, 0};
-                spdlog::info("Added servo: {}", id);
+        // Group descriptors by plugin name
+        auto* plugin_host = &m_orchestrator->plugin_host();
+        auto plugins = plugin_host->get_all_plugins();
+
+        // Map: category -> vector of (plugin_name, descriptor)
+        std::map<std::string, std::vector<std::pair<std::string, ComponentDescriptor>>> grouped;
+        for (auto* plugin : plugins) {
+            auto descs = plugin->components();
+            for (auto& desc : descs) {
+                grouped[desc.category].push_back({std::string(plugin->name()), desc});
             }
         }
 
-        ImGui::Separator();
-        ImGui::TextDisabled("Sensors");
-        if (ImGui::MenuItem("Limit Switch")) {
-            static int limit_count = 0;
-            std::string id = "limit_switch_" + std::to_string(++limit_count);
-            if (auto* comp = m_orchestrator->create_component("mech_machine_elements", "limit_switch", id)) {
-                comp->transform().position = {0, limit_count * 2.0f, 0};
-                spdlog::info("Added limit switch: {}", id);
-            }
-        }
-        if (ImGui::MenuItem("Proximity Sensor")) {
-            static int prox_count = 0;
-            std::string id = "prox_sensor_" + std::to_string(++prox_count);
-            if (auto* comp = m_orchestrator->create_component("mech_machine_elements", "proximity_sensor", id)) {
-                comp->transform().position = {0, prox_count * 2.0f, 0};
-                spdlog::info("Added proximity sensor: {}", id);
-            }
-        }
-        if (ImGui::MenuItem("Rotary Encoder")) {
-            static int encoder_count = 0;
-            std::string id = "encoder_" + std::to_string(++encoder_count);
-            if (auto* comp = m_orchestrator->create_component("mech_machine_elements", "rotary_encoder", id)) {
-                comp->transform().position = {0, encoder_count * 2.0f, 0};
-                spdlog::info("Added rotary encoder: {}", id);
-            }
-        }
+        // Friendly category names
+        static const std::map<std::string, std::string> category_labels = {
+            {"actuator", "Actuators"},
+            {"sensor", "Sensors"},
+            {"electronic", "Electronics - Passive"},
+            {"semiconductor", "Electronics - Semiconductor"},
+            {"optoelectronic", "Electronics - Optoelectronic"},
+            {"power", "Electronics - Power"},
+            {"control", "Software - Control"},
+            {"estimator", "Software - Estimator"},
+            {"mcu", "Software - MCU"},
+            {"thermal", "Multiphysics - Thermal"},
+            {"magnetic", "Multiphysics - Magnetic"},
+            {"mechanical", "Mechanics"},
+            {"rendering", "Rendering"}
+        };
 
-        ImGui::Separator();
-        ImGui::TextDisabled("Physics");
-        if (ImGui::MenuItem("Test Box")) {
-            auto mesh = Mesh::create_box(1.0f, 1.0f, 1.0f);
-            static int box_count = 0;
-            box_count++;
-            std::string id = "box_" + std::to_string(box_count);
-            m_renderer->add_object(id, std::move(mesh), {0, box_count * 1.5f, 0});
+        // Counters for unique IDs
+        static std::map<std::string, int> component_counters;
+
+        // Render each category as a section
+        for (auto& [cat, items] : grouped) {
+            std::string label = cat;
+            auto it = category_labels.find(cat);
+            if (it != category_labels.end()) label = it->second;
+
+            ImGui::TextDisabled("%s", label.c_str());
+            for (auto& [plugin_name, desc] : items) {
+                if (ImGui::MenuItem(desc.display_name.c_str())) {
+                    std::string key = plugin_name + "/" + desc.type;
+                    component_counters[key]++;
+                    std::string id = desc.type + "_" + std::to_string(component_counters[key]);
+                    if (auto* comp = m_orchestrator->create_component(plugin_name, desc.type, id)) {
+                        comp->transform().position = {component_counters[key] * 2.0f, 0, 0};
+                        spdlog::info("Added {} ({})", desc.display_name, id);
+                    } else {
+                        spdlog::warn("Failed to create component: {}/{}", plugin_name, desc.type);
+                    }
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("%s", desc.description.c_str());
+                }
+            }
+            ImGui::Separator();
         }
 
         ImGui::EndPopup();

@@ -11,9 +11,8 @@ namespace mechatron {
 
 // Solenoid Actuator
 SolenoidActuator::SolenoidActuator() {
-    // Calculate motor constant from parameters
-    // KV = no_load_rpm / voltage_rating * (2*pi/60)
-    // KT = stall_torque / (voltage_rating / resistance)
+    create_actuator_ports();  // V+, GND ports
+    // Calculate motor constants from parameters
 }
 
 float SolenoidActuator::calculate_force(float voltage) const {
@@ -40,8 +39,39 @@ float SolenoidActuator::calculate_force(float voltage) const {
 void SolenoidActuator::update(double dt) {
     if (!m_enabled) return;
 
-    // Calculate plunger dynamics
-    float voltage = m_input * 5.0f; // Assume 0-5V control
+    // Check if circuit is complete: BOTH V+ and GND must be connected
+    bool v_plus_connected = (m_power_port && !m_power_port->connections().empty());
+    bool gnd_connected = (m_gnd_port && !m_gnd_port->connections().empty());
+
+    if (!v_plus_connected || !gnd_connected) {
+        // Open circuit - no current can flow, solenoid de-energizes
+        m_plunger_velocity *= 0.9f;
+
+        // Spring returns to retracted position
+        float spring_force = -m_spring_k * m_plunger_position * m_stroke;
+        float damping = -0.5f * m_plunger_velocity;
+        float acceleration = (spring_force + damping) / m_plunger_mass;
+        m_plunger_velocity += acceleration * dt;
+        m_plunger_position += m_plunger_velocity * dt / m_stroke;
+        m_plunger_position = std::max(0.0f, std::min(1.0f, m_plunger_position));
+        if (m_plunger_position <= 0.0f) m_plunger_velocity = 0.0f;
+
+        if (m_power_port) m_power_port->set_value(0.0f);
+        return;
+    }
+
+    // Read voltage difference: V+ - GND
+    float v_plus = 0.0f, v_gnd = 0.0f;
+    if (const float* val = m_power_port->get_value<float>()) v_plus = *val;
+    if (const float* val = m_gnd_port->get_value<float>()) v_gnd = *val;
+
+    float voltage = v_plus - v_gnd;
+
+    if (voltage == 0.0f) {
+        m_plunger_velocity *= 0.9f;
+        return;
+    }
+
     float force = calculate_force(voltage);
 
     // Spring force: F = -k * x
@@ -96,6 +126,8 @@ void SolenoidActuator::deserialize(const nlohmann::json& in) {
 
 // DC Motor
 DCMotor::DCMotor() {
+    create_actuator_ports(false);  // V+, GND only (no signal pin)
+
     // Calculate KV and KT from rating parameters
     m_kv = m_no_load_rpm / m_voltage_rating * (2.0f * M_PI / 60.0f); // rad/s/V
     m_kt = m_stall_torque / (m_voltage_rating / 1.0f); // Simplified (assume 1 ohm)
@@ -122,18 +154,45 @@ float DCMotor::calculate_torque(float voltage, float angular_vel) const {
 void DCMotor::update(double dt) {
     if (!m_enabled) return;
 
-    float voltage = m_input * m_voltage_rating;
+    // Check if circuit is complete: BOTH V+ and GND must be connected
+    // for current to flow. An unconnected pin means an open circuit.
+    bool v_plus_connected = (m_power_port && !m_power_port->connections().empty());
+    bool gnd_connected = (m_gnd_port && !m_gnd_port->connections().empty());
+
+    if (!v_plus_connected || !gnd_connected) {
+        // Open circuit - no current can flow, motor coasts to stop
+        m_angular_velocity *= 0.95f;
+        m_output_torque = 0.0f;
+
+        // Update port values with 0 (no current draw)
+        if (m_power_port) m_power_port->set_value(0.0f);
+        return;
+    }
+
+    // Read voltage difference: V+ - GND (actual potential across motor)
+    float v_plus = 0.0f, v_gnd = 0.0f;
+    if (const float* val = m_power_port->get_value<float>()) v_plus = *val;
+    if (const float* val = m_gnd_port->get_value<float>()) v_gnd = *val;
+
+    float voltage = v_plus - v_gnd;
+
+    // If no voltage difference, motor coasts
+    if (voltage == 0.0f) {
+        m_angular_velocity *= 0.95f;
+        m_output_torque = 0.0f;
+        return;
+    }
+
     float torque = calculate_torque(voltage, m_angular_velocity);
 
     // Rotational dynamics with proper inertia and damping
-    // omega = omega + (T / J) * dt
-    float inertia = 0.001f; // kg*m^2 (balanced for control)
+    float inertia = 0.001f; // kg*m^2
     float angular_accel = torque / inertia;
 
     m_angular_velocity += angular_accel * dt;
 
-    // Apply damping (viscous friction + load)
-    float damping_factor = 0.95f; // Higher damping for stability
+    // Apply damping
+    float damping_factor = 0.95f;
     m_angular_velocity *= damping_factor;
 
     // Clamp to realistic max speed
@@ -144,6 +203,11 @@ void DCMotor::update(double dt) {
     m_angle += m_angular_velocity * dt;
 
     m_output_torque = torque;
+
+    // Update port values for circuit feedback
+    if (m_power_port) {
+        m_power_port->set_value(v_plus);
+    }
 
     // Update attached encoder with current angular velocity
     if (m_encoder) {
@@ -176,10 +240,44 @@ void DCMotor::deserialize(const nlohmann::json& in) {
 }
 
 // Servo Motor
-ServoMotor::ServoMotor() = default;
+ServoMotor::ServoMotor() {
+    create_actuator_ports(true);  // V+, GND, SIG (signal for position control)
+}
 
 void ServoMotor::update(double dt) {
     if (!m_enabled) return;
+
+    // Check if circuit is complete: BOTH V+ and GND must be connected
+    bool v_plus_connected = (m_power_port && !m_power_port->connections().empty());
+    bool gnd_connected = (m_gnd_port && !m_gnd_port->connections().empty());
+
+    if (!v_plus_connected || !gnd_connected) {
+        // Open circuit - no power, servo holds position
+        m_output_torque = 0.0f;
+        if (m_power_port) m_power_port->set_value(0.0f);
+        return;
+    }
+
+    // Read voltage difference: V+ - GND
+    float v_plus = 0.0f, v_gnd = 0.0f;
+    if (const float* val = m_power_port->get_value<float>()) v_plus = *val;
+    if (const float* val = m_gnd_port->get_value<float>()) v_gnd = *val;
+    float voltage = v_plus - v_gnd;
+
+    if (voltage == 0.0f) {
+        m_output_torque = 0.0f;
+        return;
+    }
+
+    // Read target angle from SIG port (if connected)
+    // SIG port maps angle: 0V = min_angle, 5V = max_angle
+    if (m_signal_port && !m_signal_port->connections().empty()) {
+        if (const float* sig_val = m_signal_port->get_value<float>()) {
+            // Map 0-5V signal to min-max angle range
+            float sig_normalized = std::max(0.0f, std::min(1.0f, *sig_val / 5.0f));
+            m_target_angle = m_min_angle + sig_normalized * (m_max_angle - m_min_angle);
+        }
+    }
 
     // Calculate angle difference
     float error = m_target_angle - m_current_angle;

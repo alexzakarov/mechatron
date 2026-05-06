@@ -21,8 +21,13 @@ std::vector<ComponentDescriptor> ElecSemiconductorPlugin::components() const {
 std::unique_ptr<Component> ElecSemiconductorPlugin::create(std::string_view type) {
     using namespace std;
     static const unordered_map<string, function<unique_ptr<Component>()>> factory = {
-        {"led", []() { return make_unique<LEDComponent>(make_unique<LED>()); }}
-        // Other semiconductor types need CircuitSimulator implementations
+        {"diode", []() { return make_unique<DiodeComponent>(make_unique<Diode>()); }},
+        {"zener_diode", []() { return make_unique<ZenerDiodeComponent>(make_unique<ZenerDiode>()); }},
+        {"led", []() { return make_unique<LEDComponent>(make_unique<LED>()); }},
+        {"bjt_npn", []() { return make_unique<BJTComponent>(make_unique<BJTTransistor>(BJTTransistor::NPN)); }},
+        {"bjt_pnp", []() { return make_unique<BJTComponent>(make_unique<BJTTransistor>(BJTTransistor::PNP)); }},
+        {"mosfet_n", []() { return make_unique<MOSFETComponent>(make_unique<MOSFETTransistor>(MOSFETTransistor::NChannel)); }},
+        {"mosfet_p", []() { return make_unique<MOSFETComponent>(make_unique<MOSFETTransistor>(MOSFETTransistor::PChannel)); }}
     };
 
     auto it = factory.find(string(type));
@@ -33,11 +38,9 @@ std::unique_ptr<Component> ElecSemiconductorPlugin::create(std::string_view type
 }
 
 void ElecSemiconductorPlugin::on_register(PluginHost& host) {
-    // Plugin initialization
 }
 
 void ElecSemiconductorPlugin::on_unregister() {
-    // Cleanup
 }
 
 } // namespace mechatron

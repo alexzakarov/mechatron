@@ -1,6 +1,7 @@
 add_library(mechatron_electronics STATIC
     CircuitSimulator.cpp
     CircuitSimulator.hpp
+    MNASolver.hpp
     NgspiceWrapper.cpp
     NgspiceWrapper.hpp
 )

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include "core/Types.hpp"
 
 namespace mechatron {
 
@@ -42,7 +43,8 @@ public:
 private:
     void render_toolbar();
     void handle_camera_input();
-    void handle_gizmo_input(Renderer& renderer, SimulationOrchestrator& orchestrator);
+    void render_gizmo(Renderer& renderer, SimulationOrchestrator& orchestrator);
+    void handle_gizmo_input_after_image(Renderer& renderer, SimulationOrchestrator& orchestrator);
     void handle_selection();
     void render_context_menu();
 
@@ -60,6 +62,11 @@ private:
     // Gizmo state
     bool m_gizmo_active = false;
     int m_gizmo_mode = 0; // 0=Translate, 1=Rotate, 2=Scale
+    float m_image_pos_x = 0, m_image_pos_y = 0; // Position of rendered image for input calculation
+    float m_image_size_x = 0, m_image_size_y = 0; // Actual size of rendered image (may differ from viewport due to toolbar)
+    Vec3 m_gizmo_start_position{}; // Component position at drag start
+    Vec3 m_gizmo_start_scale{}; // Component scale at drag start
+    Quat m_gizmo_start_rotation{}; // Component rotation at drag start
 
     // Stored renderer pointer for camera access
     Renderer* m_renderer = nullptr;

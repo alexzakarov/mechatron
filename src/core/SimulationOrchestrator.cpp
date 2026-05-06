@@ -1,6 +1,11 @@
 #include "SimulationOrchestrator.hpp"
 #include "physics/PhysicsWorld.hpp"
+#include "electronics/CircuitSimulator.hpp"
+#include "electronics/CircuitComponentAdapter.hpp"
 #include <spdlog/spdlog.h>
+#include <algorithm>
+#include <unordered_map>
+#include <unordered_set>
 
 // Plugin includes (conditionally compiled)
 #ifdef MECH_MACHINE_ELEMENTS_ENABLED
@@ -115,21 +120,30 @@ void SimulationOrchestrator::step() {
 void SimulationOrchestrator::update() {
     m_time.update();
 
-    // Only run simulation steps when not stopped
-    auto state = m_time.state();
-    if (state == SimulationState::Stopped) return;
-
     double dt = m_time.physics_step_size();
 
-    // Step 1: Circuit-physics bridge update (voltages → actuator inputs)
-    m_circuit_bridge.update(dt);
-
-    // Step 2: Update all components (actuator calculations, force generation, etc.)
+    // Step 0: Update all components (sources set output port voltages)
     m_registry.for_each([dt](Component& comp) {
         comp.update(dt);
     });
 
-    // Step 3: Component → Physics: apply forces/torques to physics bodies
+    // Step 1: Net-based voltage propagation
+    // Identifies electrically connected nets via Union-Find, then propagates
+    // voltages within each net. This replaces naive one-way propagation.
+    propagate_nets();
+
+    // Step 1.5: Circuit simulation (MNA solver)
+    // Run MNA solver to calculate currents in circuit components
+    step_circuit(dt);
+
+    // Step 2: Circuit-physics bridge update (voltages → actuator inputs)
+    m_circuit_bridge.update(dt);
+
+    // Only run physics when not stopped
+    auto state = m_time.state();
+    if (state == SimulationState::Stopped) return;
+
+    // Step 4: Component → Physics: apply forces/torques to physics bodies
     if (m_physics) {
         m_registry.for_each([this](Component& comp) {
             PhysicsBody* body = comp.physics_body();
@@ -139,10 +153,10 @@ void SimulationOrchestrator::update() {
             body->position = comp.transform().position;
         });
 
-        // Step 4: Physics step
+        // Step 5: Physics step
         m_physics->step(dt);
 
-        // Step 5: Physics → Component: write back positions
+        // Step 6: Physics → Component: write back positions
         m_registry.for_each([dt](Component& comp) {
             PhysicsBody* body = comp.physics_body();
             if (!body) return;
@@ -181,20 +195,49 @@ Component* SimulationOrchestrator::create_component(
     return ptr;
 }
 
-std::unique_ptr<Connection> SimulationOrchestrator::connect(Port* source, Port* target) {
-    auto conn = std::make_unique<Connection>(source, target);
+Connection* SimulationOrchestrator::connect(Port* source, Port* target, const std::string& uid) {
+    if (!source || !target) {
+        spdlog::warn("connect() called with null port");
+        return nullptr;
+    }
+
+    std::string conn_uid = uid.empty() ? "conn_" + std::to_string(m_next_connection_uid++) : uid;
+    auto conn = std::make_unique<Connection>(source, target, conn_uid);
     Connection* ptr = conn.get();
     m_connections.push_back(std::move(conn));
-    // Return ownership not needed - connections managed here
-    // But we return raw for convenience
-    return std::make_unique<Connection>(source, target);
+    spdlog::debug("Connected port '{}' to '{}' (UID: {})", source->name(), target->name(), conn_uid);
+    return ptr;
 }
 
 void SimulationOrchestrator::disconnect(Connection* conn) {
     // Find and remove the connection
     for (auto it = m_connections.begin(); it != m_connections.end(); ++it) {
         if (it->get() == conn) {
+            // Reset target port value to stop voltage flow
+            if (conn->target) {
+                conn->target->set_value(0.0f);
+            }
+
+            // Remove from Port's connection list so connections().empty() works
+            if (conn->source) {
+                auto& src_conns = const_cast<std::vector<Connection*>&>(conn->source->connections());
+                auto src_it = std::find(src_conns.begin(), src_conns.end(), conn);
+                if (src_it != src_conns.end()) {
+                    src_conns.erase(src_it);
+                }
+            }
+            if (conn->target) {
+                auto& tgt_conns = const_cast<std::vector<Connection*>&>(conn->target->connections());
+                auto tgt_it = std::find(tgt_conns.begin(), tgt_conns.end(), conn);
+                if (tgt_it != tgt_conns.end()) {
+                    tgt_conns.erase(tgt_it);
+                }
+            }
+
+            // Remove from orchestrator
             m_connections.erase(it);
+            spdlog::info("Disconnected: {}",
+                         conn->source ? conn->source->name() : "(null)");
             return;
         }
     }
@@ -272,6 +315,187 @@ void SimulationOrchestrator::remove_component(std::string_view id) {
 
     // Remove from registry
     m_registry.remove(id);
+}
+
+// ============================================================================
+// Net-Based Voltage Propagation
+// ============================================================================
+
+void SimulationOrchestrator::propagate_nets() {
+    if (m_connections.empty()) return;
+
+    // Union-Find: map each Port* to an integer index
+    std::unordered_map<Port*, int> port_to_idx;
+    int idx_counter = 0;
+    for (const auto& conn : m_connections) {
+        if (conn->source && port_to_idx.find(conn->source) == port_to_idx.end()) {
+            port_to_idx[conn->source] = idx_counter++;
+        }
+        if (conn->target && port_to_idx.find(conn->target) == port_to_idx.end()) {
+            port_to_idx[conn->target] = idx_counter++;
+        }
+    }
+
+    // Union-Find data structures
+    std::vector<int> parent(idx_counter);
+    for (int i = 0; i < idx_counter; i++) parent[i] = i;
+
+    auto find_root = [&parent](int x) {
+        while (parent[x] != x) {
+            parent[x] = parent[parent[x]];  // Path compression
+            x = parent[x];
+        }
+        return x;
+    };
+
+    auto union_ports = [&parent, &find_root](int a, int b) {
+        int ra = find_root(a), rb = find_root(b);
+        if (ra != rb) parent[ra] = rb;
+    };
+
+    // Build nets: union all connected ports
+    for (const auto& conn : m_connections) {
+        auto it_s = port_to_idx.find(conn->source);
+        auto it_t = port_to_idx.find(conn->target);
+        if (it_s != port_to_idx.end() && it_t != port_to_idx.end()) {
+            union_ports(it_s->second, it_t->second);
+        }
+    }
+
+    // For each net, find the driven voltage (from Output/driver ports)
+    // and propagate to all ports in the net
+    std::unordered_map<int, float> net_voltage;    // root -> voltage value
+    std::unordered_map<int, bool> net_has_voltage; // root -> has a driver
+
+    // First pass: find driven voltages in each net
+    for (const auto& [port, idx] : port_to_idx) {
+        int root = find_root(idx);
+
+        // Check if this port is driven (Output direction and has a valid value)
+        if (port->direction() == PortDirection::Output) {
+            if (const float* val = port->get_value<float>()) {
+                net_voltage[root] = *val;
+                net_has_voltage[root] = true;
+            }
+        }
+    }
+
+    // Second pass: propagate net voltage to all ports in the net
+    for (const auto& [port, idx] : port_to_idx) {
+        int root = find_root(idx);
+        if (net_has_voltage.count(root) && net_has_voltage[root]) {
+            port->set_value(net_voltage[root]);
+        }
+    }
+}
+
+void SimulationOrchestrator::step_circuit(double dt) {
+    // Lazy initialization of circuit simulator
+    if (!m_circuit_simulator) {
+        m_circuit_simulator = new CircuitSimulator();
+        spdlog::info("[CIRCUIT] Circuit simulator initialized");
+    }
+
+    // Check if we have any circuit components to simulate
+    bool has_circuit = false;
+    m_registry.for_each([&has_circuit](Component& comp) {
+        std::string_view cat = comp.category();
+        if (cat == "passive" || cat == "semiconductor" || cat == "power" ||
+            cat == "electronic" || cat == "optoelectronic") {
+            has_circuit = true;
+        }
+    });
+
+    if (!has_circuit) {
+        return;
+    }
+
+    // Sync circuit components from adapters to simulator
+    // IMPORTANT: We use the EXISTING circuit component instances from adapters
+    // instead of creating duplicates. This ensures that current calculations
+    // are reflected in the UI without needing to copy values back.
+    m_registry.for_each([this](Component& comp) {
+        std::string_view cat = comp.category();
+        std::string_view ctype = comp.component_type();
+
+        // Only process circuit components
+        bool is_circuit = (cat == "electronic" || cat == "passive" ||
+                          cat == "semiconductor" || cat == "power" ||
+                          cat == "optoelectronic");
+
+        if (!is_circuit) return;
+
+        // Check if already added to simulator
+        if (m_circuit_simulator->get_component(comp.id())) {
+            return;
+        }
+
+        // Get the circuit component from adapter and add it to simulator
+        // This uses the SAME instance, not a copy
+        #define ADD_CIRCOMP_FROM_ADAPTER(AdapterType) \
+            if (auto* adapted = dynamic_cast<AdapterType*>(&comp)) { \
+                auto* circuit_comp = adapted->circuit_component(); \
+                if (circuit_comp) { \
+                    m_circuit_simulator->add_component_external(comp.id(), circuit_comp); \
+                    spdlog::info("[CIRCUIT] Added {} ({}) to simulator (external)", comp.id(), ctype); \
+                } \
+            }
+
+        // Passive components
+        if (cat == "passive") {
+            ADD_CIRCOMP_FROM_ADAPTER(ResistorComponent);
+            ADD_CIRCOMP_FROM_ADAPTER(CapacitorComponent);
+            ADD_CIRCOMP_FROM_ADAPTER(InductorComponent);
+        }
+        // Semiconductor components
+        else if (cat == "semiconductor") {
+            ADD_CIRCOMP_FROM_ADAPTER(DiodeComponent);
+            ADD_CIRCOMP_FROM_ADAPTER(ZenerDiodeComponent);
+            ADD_CIRCOMP_FROM_ADAPTER(LEDComponent);
+            ADD_CIRCOMP_FROM_ADAPTER(BJTComponent);
+            ADD_CIRCOMP_FROM_ADAPTER(MOSFETComponent);
+        }
+        // Power components
+        else if (cat == "power") {
+            ADD_CIRCOMP_FROM_ADAPTER(DCVoltageComponent);
+            ADD_CIRCOMP_FROM_ADAPTER(GroundComponent);
+            ADD_CIRCOMP_FROM_ADAPTER(HBridgeComponent);
+            ADD_CIRCOMP_FROM_ADAPTER(BuckConverterComponent);
+            ADD_CIRCOMP_FROM_ADAPTER(BoostConverterComponent);
+            ADD_CIRCOMP_FROM_ADAPTER(MotorDriverComponent);
+        }
+
+        #undef ADD_CIRCOMP_FROM_ADAPTER
+    });
+
+    // Sync wire connections from orchestrator to circuit simulator
+    for (const auto& conn : m_connections) {
+        Port* src_port = conn->source;
+        Port* tgt_port = conn->target;
+
+        if (!src_port || !tgt_port) continue;
+
+        Component* src_comp = src_port->owner();
+        Component* tgt_comp = tgt_port->owner();
+
+        if (!src_comp || !tgt_comp) continue;
+
+        std::string wire_id = conn->uid.empty() ?
+            ("wire_" + std::string(src_comp->id()) + "_" + std::string(tgt_comp->id())) :
+            conn->uid;
+
+        m_circuit_simulator->connect(
+            wire_id,
+            std::string(src_comp->id()),
+            std::string(src_port->name()),
+            std::string(tgt_comp->id()),
+            std::string(tgt_port->name())
+        );
+    }
+
+    // Step the circuit simulator (MNA solver + Newton-Raphson)
+    // This will update voltages and currents directly in the adapter components
+    m_circuit_simulator->step(dt);
 }
 
 } // namespace mechatron

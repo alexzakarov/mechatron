@@ -13,6 +13,16 @@ namespace mechatron {
 ProximitySensor::ProximitySensor() {
     m_min_value = 0.0f;
     m_max_value = 5.0f;
+
+    // Create sensor ports
+    m_v_plus_port = std::make_unique<Port>("V+", PortDomain::Electrical, PortDirection::Input);
+    m_v_plus_port->set_value(0.0f);
+
+    m_output_port = std::make_unique<Port>("OUT", PortDomain::Analog, PortDirection::Output);
+    m_output_port->set_value(0.0f);
+
+    m_gnd_port = std::make_unique<Port>("GND", PortDomain::Electrical, PortDirection::Input);
+    m_gnd_port->set_value(0.0f);
 }
 
 void ProximitySensor::update(double dt) {
@@ -36,6 +46,16 @@ void ProximitySensor::update(double dt) {
         m_distance += noise(gen);
         m_distance = std::max(0.0f, m_distance);
     }
+
+    // Convert distance to output voltage
+    // Closer = higher voltage, farther = lower voltage
+    float ratio = 1.0f - (m_distance / m_max_range);
+    float signal_voltage = ratio * m_max_value;
+
+    // Write to output port
+    if (m_output_port) {
+        m_output_port->set_value(signal_voltage);
+    }
 }
 
 void ProximitySensor::serialize(nlohmann::json& out) const {
@@ -53,6 +73,13 @@ void ProximitySensor::deserialize(const nlohmann::json& in) {
 LimitSwitch::LimitSwitch() {
     m_min_value = 0.0f;
     m_max_value = 5.0f;
+
+    // Create 2-terminal switch contact ports
+    m_terminal_a_port = std::make_unique<Port>("A", PortDomain::Electrical, PortDirection::Bidirectional);
+    m_terminal_a_port->set_value(0.0f);
+
+    m_terminal_b_port = std::make_unique<Port>("B", PortDomain::Electrical, PortDirection::Bidirectional);
+    m_terminal_b_port->set_value(0.0f);
 }
 
 void LimitSwitch::update(double dt) {
@@ -65,6 +92,22 @@ void LimitSwitch::update(double dt) {
 
     float dist = std::sqrt(diff.x * diff.x + diff.y * diff.y + diff.z * diff.z);
     m_triggered = dist < m_threshold;
+
+    // Update switch contact state
+    // When triggered: switch is CLOSED (terminals connected)
+    // When not triggered: switch is OPEN
+    if (m_triggered) {
+        // Closed switch: connect terminals (copy voltage from A to B)
+        if (m_terminal_a_port && m_terminal_b_port) {
+            if (const float* val_a = m_terminal_a_port->get_value<float>()) {
+                m_terminal_b_port->set_value(*val_a);
+            }
+        }
+    } else {
+        // Open switch: terminals disconnected, set both to 0
+        if (m_terminal_a_port) m_terminal_a_port->set_value(0.0f);
+        if (m_terminal_b_port) m_terminal_b_port->set_value(0.0f);
+    }
 }
 
 void LimitSwitch::serialize(nlohmann::json& out) const {
@@ -121,6 +164,16 @@ void RotaryEncoder::deserialize(const nlohmann::json& in) {
 Potentiometer::Potentiometer() {
     m_min_value = 0.0f;
     m_max_value = 5.0f;
+
+    // Create 3-terminal potentiometer ports
+    m_v_plus_port = std::make_unique<Port>("V+", PortDomain::Electrical, PortDirection::Input);
+    m_v_plus_port->set_value(0.0f);
+
+    m_wiper_port = std::make_unique<Port>("WIPER", PortDomain::Analog, PortDirection::Output);
+    m_wiper_port->set_value(0.0f);
+
+    m_gnd_port = std::make_unique<Port>("GND", PortDomain::Electrical, PortDirection::Input);
+    m_gnd_port->set_value(0.0f);
 }
 
 void Potentiometer::update(double dt) {
@@ -135,9 +188,25 @@ void Potentiometer::update(double dt) {
 
     m_angle = m_min_angle + normalized_pos * (m_max_angle - m_min_angle);
 
-    // Convert angle to voltage (0-5V)
+    // Check if V+ and GND are connected for voltage divider
+    float v_plus = 5.0f;  // Default 5V if not connected
+    float v_gnd = 0.0f;
+
+    if (m_v_plus_port && !m_v_plus_port->connections().empty()) {
+        if (const float* val = m_v_plus_port->get_value<float>()) v_plus = *val;
+    }
+    if (m_gnd_port && !m_gnd_port->connections().empty()) {
+        if (const float* val = m_gnd_port->get_value<float>()) v_gnd = *val;
+    }
+
+    // Voltage divider: V_wiper = (V+ - GND) * (angle / max_angle) + GND
     float voltage_ratio = m_angle / m_max_angle;
-    m_voltage = voltage_ratio * m_max_value;
+    m_voltage = (v_plus - v_gnd) * voltage_ratio + v_gnd;
+
+    // Write wiper voltage to output port
+    if (m_wiper_port) {
+        m_wiper_port->set_value(m_voltage);
+    }
 }
 
 void Potentiometer::serialize(nlohmann::json& out) const {

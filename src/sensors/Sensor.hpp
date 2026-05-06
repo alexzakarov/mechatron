@@ -61,11 +61,25 @@ public:
     void set_fov(float fov_degrees) { m_fov = fov_degrees; }
     void set_target_position(Vec3 pos) { m_target_position = pos; }
 
+    // Port access for circuit integration
+    std::vector<Port*> get_ports() override {
+        std::vector<Port*> result;
+        if (m_v_plus_port) result.push_back(m_v_plus_port.get());
+        if (m_output_port) result.push_back(m_output_port.get());
+        if (m_gnd_port) result.push_back(m_gnd_port.get());
+        return result;
+    }
+
 private:
     float m_distance = 0.0f;
     float m_max_range = 5.0f;     // Maximum detection range (meters)
     float m_fov = 30.0f;          // Field of view (degrees)
     Vec3 m_target_position{0, 0, 0};    // Position to measure distance to
+
+    // Ports for circuit integration
+    std::unique_ptr<Port> m_v_plus_port;   // V+ input
+    std::unique_ptr<Port> m_output_port;   // Output signal (distance → voltage)
+    std::unique_ptr<Port> m_gnd_port;      // GND input
 };
 
 // Limit Switch - binary contact sensor
@@ -88,10 +102,22 @@ public:
     void set_trigger_position(Vec3 pos) { m_trigger_position = pos; }
     void set_trigger_threshold(float threshold) { m_threshold = threshold; }
 
+    // Port access for circuit integration (2-terminal switch contact)
+    std::vector<Port*> get_ports() override {
+        std::vector<Port*> result;
+        if (m_terminal_a_port) result.push_back(m_terminal_a_port.get());
+        if (m_terminal_b_port) result.push_back(m_terminal_b_port.get());
+        return result;
+    }
+
 private:
     bool m_triggered = false;
     Vec3 m_trigger_position{0, 0, 0};
     float m_threshold = 0.1f;    // Distance threshold for triggering
+
+    // Ports for circuit integration (2-terminal switch contact)
+    std::unique_ptr<Port> m_terminal_a_port;  // Switch terminal A
+    std::unique_ptr<Port> m_terminal_b_port;  // Switch terminal B
 };
 
 // Rotary Encoder - measures angular position
@@ -154,11 +180,25 @@ public:
         m_max_angle = max_deg;
     }
 
+    // Port access for circuit integration
+    std::vector<Port*> get_ports() override {
+        std::vector<Port*> result;
+        if (m_v_plus_port) result.push_back(m_v_plus_port.get());
+        if (m_wiper_port) result.push_back(m_wiper_port.get());
+        if (m_gnd_port) result.push_back(m_gnd_port.get());
+        return result;
+    }
+
 private:
     float m_voltage = 0.0f;
     float m_angle = 0.0f;
     float m_min_angle = 0.0f;
     float m_max_angle = 270.0f;
+
+    // Ports for circuit integration (3-terminal potentiometer)
+    std::unique_ptr<Port> m_v_plus_port;  // V+ input
+    std::unique_ptr<Port> m_wiper_port;   // Wiper output (divided voltage)
+    std::unique_ptr<Port> m_gnd_port;     // GND input
 };
 
 } // namespace mechatron

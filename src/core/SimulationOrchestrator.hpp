@@ -50,8 +50,12 @@ public:
     void register_plugin(std::unique_ptr<IMechatronPlugin> plugin);
 
     // Connection management
-    std::unique_ptr<Connection> connect(Port* source, Port* target);
+    Connection* connect(Port* source, Port* target, const std::string& uid = "");
     void disconnect(Connection* conn);
+    const std::vector<std::unique_ptr<Connection>>& get_connections() const { return m_connections; }
+
+    // Net-based voltage propagation
+    void propagate_nets();
 
     // Selection
     void set_selected_component(const std::string& id) { m_selected_component = id; }
@@ -60,6 +64,10 @@ public:
     // Remove component (also cleans up physics body)
     void remove_component(std::string_view id);
 
+    // Circuit simulation
+    void step_circuit(double dt);
+    bool has_circuit() const { return m_circuit_simulator != nullptr; }
+
 private:
     TimeManager m_time;
     EventBus m_events;
@@ -67,8 +75,12 @@ private:
     Registry m_registry;
     std::unordered_map<std::string, std::unique_ptr<Subsystem>> m_subsystems;
     std::vector<std::unique_ptr<Connection>> m_connections;
+    int m_next_connection_uid = 0;  // Connection UID generator
 
     CircuitPhysicsBridge m_circuit_bridge;
+
+    // Circuit simulator instance
+    class CircuitSimulator* m_circuit_simulator = nullptr;
 
     std::string m_selected_component;
 

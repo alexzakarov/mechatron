@@ -38,7 +38,14 @@ using PortValue = std::variant<
 
 class Connection;
 
+class Component; // Forward declaration
+template<typename> class CircuitComponentAdapter; // Forward declaration
+
 class Port {
+    friend struct Connection;
+    friend class Component;
+    template<typename> friend class CircuitComponentAdapter;  // Allow adapter to set m_owner
+
 public:
     Port(std::string name, PortDomain domain, PortDirection direction)
         : m_name(std::move(name)), m_domain(domain), m_direction(direction) {}
@@ -60,21 +67,33 @@ public:
     void connect(Connection* conn) { m_connections.push_back(conn); }
     const std::vector<Connection*>& connections() const { return m_connections; }
 
+    Component* owner() const { return m_owner; }
+
 private:
     std::string m_name;
     PortDomain m_domain;
     PortDirection m_direction;
     PortValue m_value{false};
     std::vector<Connection*> m_connections;
+    Component* m_owner = nullptr;  // Set by Component during port creation
 };
 
 struct Connection {
+    std::string uid;  // Unique identifier
     Port* source;
     Port* target;
 
-    Connection(Port* src, Port* tgt) : source(src), target(tgt) {
+    Connection(Port* src, Port* tgt, std::string uid = "")
+        : uid(std::move(uid)), source(src), target(tgt) {
         source->connect(this);
         target->connect(this);
+    }
+
+    // Propagate data from source port to target port
+    void propagate() {
+        if (!source || !target) return;
+        // Copy source value to target (output -> input data flow)
+        target->m_value = source->m_value;
     }
 };
 
