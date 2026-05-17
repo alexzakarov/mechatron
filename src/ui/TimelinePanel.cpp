@@ -6,7 +6,7 @@
 namespace mechatron {
 
 void TimelinePanel::render(SimulationOrchestrator& orchestrator) {
-    ImGui::Begin("Timeline");
+    // No Begin/End - we're inside a tab
 
     auto& time = orchestrator.time_manager();
     auto state = time.state();
@@ -106,8 +106,6 @@ void TimelinePanel::render(SimulationOrchestrator& orchestrator) {
 
     ImGui::EndChild();
     ImGui::PopStyleColor();
-
-    ImGui::End();
 }
 
 } // namespace mechatron

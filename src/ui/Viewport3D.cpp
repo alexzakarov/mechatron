@@ -1,4 +1,7 @@
 #include "Viewport3D.hpp"
+#include "CircuitEditor.hpp"
+#include "CodeEditor.hpp"
+#include "ModelEditor.hpp"
 #include "renderer/Renderer.hpp"
 #include "renderer/GridRenderer.hpp"
 #include "renderer/ComponentRenderer.hpp"
@@ -35,32 +38,83 @@ void Viewport3D::render(Renderer& renderer, SimulationOrchestrator& orchestrator
     m_renderer = &renderer;
     m_orchestrator = &orchestrator;
 
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+    // Get total window size first
+    ImVec2 total_size = ImGui::GetContentRegionAvail();
 
-    // Dock viewport to bottom-right corner - fixed position
-    ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoScrollbar |
-                                    ImGuiWindowFlags_NoScrollWithMouse |
-                                    ImGuiWindowFlags_NoMove |
-                                    ImGuiWindowFlags_NoResize |
-                                    ImGuiWindowFlags_NoCollapse;
+    // Reserve space for toolbar
+    float toolbar_height = 30.0f;
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4, 4));
 
-    // Set window to bottom-right corner
-    ImGuiIO& io = ImGui::GetIO();
-    float window_width = 600.0f;
-    float window_height = 500.0f;
-    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - window_width, io.DisplaySize.y - window_height - 20), ImGuiCond_Always);
-    ImGui::SetNextWindowSize(ImVec2(window_width, window_height), ImGuiCond_Always);
+    // Render toolbar in reserved space
+    render_toolbar();
 
-    ImGui::Begin("3D Viewport", nullptr, window_flags);
+    ImGui::PopStyleVar();
 
-    ImVec2 size = ImGui::GetContentRegionAvail();
-    m_width = static_cast<int>(size.x);
-    m_height = static_cast<int>(size.y);
+    // Tab bar for Viewport3D, Circuit Editor, Model, Code Editor
+    if (ImGui::BeginTabBar("CenterTabBar", ImGuiTabBarFlags_None)) {
+        if (ImGui::BeginTabItem("Viewport3D")) {
+            render_3d_viewport(renderer, orchestrator, total_size, toolbar_height);
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Circuit Editor")) {
+            render_circuit_editor_tab(orchestrator);
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Model")) {
+            render_model_editor_tab(orchestrator);
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Code Editor")) {
+            render_code_editor_tab(orchestrator);
+            ImGui::EndTabItem();
+        }
+
+        // Dynamic oscilloscope tabs
+        // Check for open request from CircuitEditor
+        if (m_circuit_editor) {
+            const std::string& req = m_circuit_editor->oscilloscope_open_request();
+            if (!req.empty()) {
+                // Check if already open
+                bool already_open = false;
+                for (auto& panel : m_oscilloscope_panels) {
+                    if (panel.component_id() == req) {
+                        already_open = true;
+                        break;
+                    }
+                }
+                if (!already_open) {
+                    m_oscilloscope_panels.emplace_back(req);
+                }
+                m_circuit_editor->clear_oscilloscope_open_request();
+            }
+        }
+
+        // Render each oscilloscope panel as a tab
+        for (size_t i = 0; i < m_oscilloscope_panels.size(); ++i) {
+            bool tab_open = true;
+            std::string tab_label = "Scope: " + m_oscilloscope_panels[i].component_id();
+            if (ImGui::BeginTabItem(tab_label.c_str(), &tab_open)) {
+                m_oscilloscope_panels[i].render(orchestrator);
+                ImGui::EndTabItem();
+            }
+            if (!tab_open) {
+                m_oscilloscope_panels.erase(m_oscilloscope_panels.begin() + i);
+                --i;
+            }
+        }
+
+        ImGui::EndTabBar();
+    }
+}
+
+void Viewport3D::render_3d_viewport(Renderer& renderer, SimulationOrchestrator& orchestrator, ImVec2 total_size, float toolbar_height) {
+    // Calculate available size for 3D viewport (minus toolbar)
+    m_width = static_cast<int>(total_size.x);
+    m_height = static_cast<int>(total_size.y - toolbar_height - 10);  // -10 for padding
+
+    // Store hover/focused state
     m_hovered = ImGui::IsWindowHovered();
     m_focused = ImGui::IsWindowFocused();
-
-    // Render toolbar at top
-    render_toolbar();
 
     if (m_width > 0 && m_height > 0) {
         // Create/recreate FBO if needed
@@ -111,29 +165,61 @@ void Viewport3D::render(Renderer& renderer, SimulationOrchestrator& orchestrator
         renderer.unbind_framebuffer();
 
         // Display the rendered texture in ImGui
-        ImVec2 fbo_size((float)renderer.fbo_width(), (float)renderer.fbo_height());
+        GLuint texture_id = renderer.get_color_texture();
+        if (texture_id == 0) {
+            ImGui::Text("FBO texture not created!");
+        } else {
+            ImVec2 fbo_size((float)renderer.fbo_width(), (float)renderer.fbo_height());
 
-        // Render the FBO texture
-        ImGui::Image((ImTextureID)(intptr_t)renderer.get_color_texture(), fbo_size,
-                     ImVec2(0, 1), ImVec2(1, 0));
+            // Render the FBO texture
+            ImGui::Image((ImTextureID)(intptr_t)texture_id, fbo_size,
+                         ImVec2(0, 1), ImVec2(1, 0));
 
-        // Get actual image position after rendering (more accurate than CursorScreenPos)
-        ImVec2 image_rect_min = ImGui::GetItemRectMin();
-        m_image_pos_x = image_rect_min.x;
-        m_image_pos_y = image_rect_min.y;
+            // Get actual image position after rendering
+            ImVec2 image_rect_min = ImGui::GetItemRectMin();
+            m_image_pos_x = image_rect_min.x;
+            m_image_pos_y = image_rect_min.y;
 
-        // Handle gizmo input after image is rendered (ImGui item is now active)
-        handle_gizmo_input_after_image(renderer, orchestrator);
+            // Handle gizmo input after image is rendered
+            handle_gizmo_input_after_image(renderer, orchestrator);
 
-        // Handle selection after gizmo (so gizmo gets first chance at clicks)
-        handle_selection();
+            // Handle selection after gizmo
+            handle_selection();
+        }
     }
 
     // Context menu
     render_context_menu();
+}
 
-    ImGui::End();
-    ImGui::PopStyleVar();
+void Viewport3D::render_circuit_editor_tab(SimulationOrchestrator& orchestrator) {
+    if (m_circuit_editor) {
+        m_circuit_editor->render(orchestrator);
+    } else {
+        ImGui::Text("Circuit Editor");
+        ImGui::Separator();
+        ImGui::TextDisabled("Circuit editor not initialized...");
+    }
+}
+
+void Viewport3D::render_code_editor_tab(SimulationOrchestrator& orchestrator) {
+    if (m_code_editor) {
+        m_code_editor->render(orchestrator);
+    } else {
+        ImGui::Text("Code Editor");
+        ImGui::Separator();
+        ImGui::TextDisabled("Code editor not initialized...");
+    }
+}
+
+void Viewport3D::render_model_editor_tab(SimulationOrchestrator& orchestrator) {
+    if (m_model_editor) {
+        m_model_editor->render(orchestrator);
+    } else {
+        ImGui::Text("Model Editor");
+        ImGui::Separator();
+        ImGui::TextDisabled("Model editor not initialized...");
+    }
 }
 
 void Viewport3D::render_toolbar() {
@@ -202,7 +288,7 @@ void Viewport3D::render_toolbar() {
 }
 
 void Viewport3D::handle_camera_input() {
-    if (!m_hovered || !m_renderer) return;
+    if (!m_renderer || !m_focused) return;
 
     auto& cam = m_renderer->camera();
     ImGuiIO& io = ImGui::GetIO();
@@ -263,13 +349,14 @@ void Viewport3D::handle_camera_input() {
 }
 
 void Viewport3D::handle_selection() {
-    if (!m_renderer || !m_orchestrator || !m_hovered) return;
+    if (!m_renderer || !m_orchestrator) return;
 
     // Don't select if gizmo is active (gizmo gets priority)
     if (m_gizmo_active) return;
 
-    // Left click to select
-    if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+    // Left click to select (only if hovering over viewport)
+    if (!m_hovered) return;
+    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
         ImVec2 mouse_pos = ImGui::GetIO().MousePos;
         ImVec2 rect_min = ImGui::GetItemRectMin();
         ImVec2 rect_max = ImGui::GetItemRectMax();
@@ -331,16 +418,17 @@ void Viewport3D::handle_selection() {
     }
 
     // Right click to open context menu (only if something is selected and not dragging)
-    if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Right) && !ImGui::IsMouseDragging(ImGuiMouseButton_Right) && !m_orchestrator->get_selected_component().empty()) {
+    if (!m_hovered) return;
+    if (ImGui::IsMouseClicked(ImGuiMouseButton_Right) && !ImGui::IsMouseDragging(ImGuiMouseButton_Right) && !m_orchestrator->get_selected_component().empty()) {
         m_show_context_menu = true;
-        ImGui::OpenPopup("ViewportContextMenu");
+        ImGui::OpenPopup("##ViewportContextMenu");
     }
 }
 
 void Viewport3D::render_context_menu() {
     if (!m_show_context_menu) return;
 
-    if (ImGui::BeginPopup("ViewportContextMenu")) {
+    if (ImGui::BeginPopup("##ViewportContextMenu")) {
         const std::string& selected = m_orchestrator->get_selected_component();
 
         if (!selected.empty()) {

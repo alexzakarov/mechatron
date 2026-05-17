@@ -32,6 +32,23 @@ public:
 
     virtual std::vector<Port*> get_ports() { return {}; }
 
+    virtual bool load_firmware_file(const std::string& path) { return false; }
+    virtual bool get_mcu_pin_output_voltage(std::string_view pin_name, float& voltage) const {
+        return false;
+    }
+    virtual bool set_mcu_pin_input_voltage(std::string_view pin_name, float voltage) {
+        return false;
+    }
+
+    // Optional: bind this simulated component to a physical device (e.g., serial).
+    // Defaults are no-ops so existing components remain unaffected.
+    virtual bool physical_link_supported() const { return false; }
+    virtual void physical_link_get_config(std::string& port, int& baud) const { (void)port; (void)baud; }
+    virtual void physical_link_set_config(const std::string& port, int baud) { (void)port; (void)baud; }
+    virtual bool physical_link_connect() { return false; } // uses stored config
+    virtual void physical_link_disconnect() {}
+    virtual bool physical_link_is_connected() const { return false; }
+
     const std::string& id() const { return m_id; }
     void set_id(std::string id) { m_id = std::move(id); }
 
@@ -47,6 +64,12 @@ public:
     virtual void on_physics_update(double dt) {}
 
 protected:
+    void assign_port_owner(Port* port) {
+        if (port) {
+            port->m_owner = this;
+        }
+    }
+
     std::string m_id;
     Transform m_transform;
     PhysicsBody* m_physics_body = nullptr;

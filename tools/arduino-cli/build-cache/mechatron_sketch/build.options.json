@@ -1,0 +1,9 @@
+{
+  "additionalFiles": "",
+  "compiler.optimization_flags": "",
+  "customBuildProperties": "",
+  "fqbn": "arduino:avr:uno",
+  "hardwareFolders": "/Users/alex.zakarov/Desktop/mechatron/tools/arduino-cli/data/packages/arduino/hardware/avr/1.8.7,/Users/alex.zakarov/Desktop/mechatron/tools/arduino-cli/data/packages/arduino/hardware/avr/1.8.7",
+  "otherLibrariesFolders": "/Users/alex.zakarov/Desktop/mechatron/tools/arduino-cli/user/libraries",
+  "sketchLocation": "/private/var/folders/x9/jq4h3j1s587_75sds7hk6f400000gn/T/mechatron_sketch"
+}

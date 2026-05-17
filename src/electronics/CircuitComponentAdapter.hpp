@@ -35,6 +35,17 @@ inline PortDirection map_pin_direction(PinDirection pin_dir) {
 }
 
 /**
+ * @brief Type-erased interface for all circuit component adapters.
+ */
+class ICircuitComponentAdapter {
+public:
+    virtual ~ICircuitComponentAdapter() = default;
+    virtual CircuitComponent* circuit_component_base() = 0;
+    virtual const CircuitComponent* circuit_component_base() const = 0;
+    virtual void sync_circuit_pins_to_ports() = 0;
+};
+
+/**
  * @brief Adapter to make CircuitComponent compatible with Component interface
  *
  * Bridges the gap between CircuitComponent (circuit simulation) and Component (plugin architecture).
@@ -44,7 +55,7 @@ inline PortDirection map_pin_direction(PinDirection pin_dir) {
  * electrical connections between components in the simulation.
  */
 template<typename CircuitComp>
-class CircuitComponentAdapter : public Component {
+class CircuitComponentAdapter : public Component, public ICircuitComponentAdapter {
 public:
     explicit CircuitComponentAdapter(std::unique_ptr<CircuitComp> circuit_comp)
         : m_circuit_component(std::move(circuit_comp)) {
@@ -93,6 +104,13 @@ public:
 
     CircuitComp* circuit_component() { return m_circuit_component.get(); }
     const CircuitComp* circuit_component() const { return m_circuit_component.get(); }
+
+    CircuitComponent* circuit_component_base() override { return m_circuit_component.get(); }
+    const CircuitComponent* circuit_component_base() const override { return m_circuit_component.get(); }
+
+    void sync_circuit_pins_to_ports() override {
+        sync_pins_to_ports();
+    }
 
 private:
     void create_ports_from_pins() {

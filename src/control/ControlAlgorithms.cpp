@@ -48,12 +48,11 @@ float PIDController::compute(float setpoint, float measurement)
     // prevent the integral from accumulating too rapidly. This is a form of
     // "error band limiting" or "setpoint ramping" approach.
     // The max_error allows full proportional action but limits integral buildup.
-    constexpr float MAX_ERROR = 50.0f; // Maximum error magnitude for integration
     float error_for_integral = m_error;
-    if (error_for_integral > MAX_ERROR) {
-        error_for_integral = MAX_ERROR;
-    } else if (error_for_integral < -MAX_ERROR) {
-        error_for_integral = -MAX_ERROR;
+    if (error_for_integral > m_params.max_error) {
+        error_for_integral = m_params.max_error;
+    } else if (error_for_integral < -m_params.max_error) {
+        error_for_integral = -m_params.max_error;
     }
 
     // Proportional term (use full error for immediate response)
@@ -568,33 +567,118 @@ void MPCController::reset()
 
 float MPCController::compute(const std::vector<float>& reference, const std::vector<float>& state)
 {
-    // Simplified MPC - compute first control input using a basic approach
-    // Full implementation would require QP solver (e.g., qpOASES, OSQP)
+    // Model Predictive Control implementation
+    // Solves: min sum(x[k]'*Q*x[k] + u[k]'*R*u[k]) for k=0 to horizon
+    // Subject to: x[k+1] = A*x[k] + B*u[k]
+    //
+    // This implementation uses an analytical solution for the unconstrained case.
+    // For constrained MPC, a QP solver would be required.
 
-    // For now, use a basic approach: minimize cost = sum(x'Qx + uRu) over horizon
-    // This is a simplified version without constraints
-
-    if (state.empty()) {
+    if (state.empty() || m_params.n_states == 0 || m_params.n_inputs == 0) {
         return 0.0f;
     }
 
-    // Use first element of reference as primary setpoint
-    float primary_ref = reference.empty() ? 0.0f : reference[0];
-    float primary_state = state[0];
+    // Default to identity matrices if not provided
+    auto& A = m_params.A;
+    auto& B = m_params.B;
+    auto& Q = m_params.Q;
+    auto& R = m_params.R;
 
-    // Simple PI-like control for now (placeholder for full MPC)
-    float error = primary_ref - primary_state;
-    float u = 10.0f * error;  // Placeholder gain
-
-    // Clamp
-    if (!m_params.input_max.empty() && u > m_params.input_max[0]) {
-        u = m_params.input_max[0];
-    }
-    if (!m_params.input_min.empty() && u < m_params.input_min[0]) {
-        u = m_params.input_min[0];
+    // If matrices are not defined, use simple proportional control as fallback
+    if (A.empty() || B.empty()) {
+        float primary_ref = reference.empty() ? 0.0f : reference[0];
+        float error = primary_ref - state[0];
+        return error * 5.0f; // Default gain
     }
 
-    return u;
+    int n_states = m_params.n_states;
+    int n_inputs = m_params.n_inputs;
+    int horizon = m_params.horizon;
+
+    // Ensure Q and R matrices exist
+    if (Q.empty()) {
+        // Default: identity for Q
+        m_params.Q.assign(n_states, std::vector<float>(n_states, 0.0f));
+        for (int i = 0; i < n_states; ++i) m_params.Q[i][i] = 1.0f;
+    }
+    if (R.empty()) {
+        // Default: small value for R (penalize input less than state)
+        m_params.R.assign(n_inputs, std::vector<float>(n_inputs, 0.0f));
+        for (int i = 0; i < n_inputs; ++i) m_params.R[i][i] = 0.1f;
+    }
+
+    // Predict states over horizon and compute cost gradient
+    // Using simplified approach: compute gradient of cost function
+    // J = sum((x_ref - x_k)'*Q*(x_ref - x_k) + u_k'*R*u_k)
+    //
+    // For unconstrained case: dJ/du = 0 gives optimal u
+    //
+    // This is a simplified version that computes:
+    // 1. Predicted error trajectory
+    // 2. Control action that minimizes predicted error
+
+    // Initialize predicted state
+    m_predicted_state = state;
+
+    std::vector<float> gradient(n_inputs, 0.0f);
+    std::vector<float> hessian_diag(n_inputs, 0.0f);
+
+    // Predict over horizon and accumulate gradient
+    for (int k = 0; k < horizon; ++k) {
+        // Get reference for this step (repeat last reference if needed)
+        float ref_k = reference.empty() ? 0.0f :
+                      (k < static_cast<int>(reference.size()) ? reference[k] : reference.back());
+
+        // Compute error
+        std::vector<float> error(n_states);
+        for (int i = 0; i < n_states; ++i) {
+            error[i] = ref_k - m_predicted_state[i];
+        }
+
+        // Compute gradient contribution: dJ/du = -2*B'*Q*error
+        // For single input: gradient[0] += -2 * sum(B[i] * Q[i][i] * error[i])
+        for (int i = 0; i < n_states; ++i) {
+            for (int j = 0; j < n_inputs; ++j) {
+                // B[i][j] * Q[i][i] * error[i]
+                float b_q_e = B[i][j] * Q[i][i] * error[i];
+                gradient[j] += 2.0f * b_q_e;
+                // Hessian diagonal: d2J/du2 = 2 * (B'*Q*B + R)
+                hessian_diag[j] += 2.0f * (B[i][j] * Q[i][i] * B[i][j] + R[j][j]);
+            }
+        }
+
+        // Predict next state: x[k+1] = A*x[k] + B*u
+        // For gradient computation, we use current predicted state
+        std::vector<float> next_state(n_states, 0.0f);
+        for (int i = 0; i < n_states; ++i) {
+            for (int j = 0; j < n_states; ++j) {
+                next_state[i] += A[i][j] * m_predicted_state[j];
+            }
+        }
+        m_predicted_state = next_state;
+    }
+
+    // Compute optimal control: u* = -H^(-1) * g
+    // For diagonal case: u[i] = -gradient[i] / hessian_diag[i]
+    std::vector<float> u_opt(n_inputs);
+    for (int i = 0; i < n_inputs; ++i) {
+        if (std::abs(hessian_diag[i]) > 1e-6f) {
+            u_opt[i] = -gradient[i] / hessian_diag[i];
+        } else {
+            u_opt[i] = 0.0f;
+        }
+
+        // Clamp to input limits
+        if (!m_params.input_max.empty() && i < static_cast<int>(m_params.input_max.size())) {
+            u_opt[i] = std::min(u_opt[i], m_params.input_max[i]);
+        }
+        if (!m_params.input_min.empty() && i < static_cast<int>(m_params.input_min.size())) {
+            u_opt[i] = std::max(u_opt[i], m_params.input_min[i]);
+        }
+    }
+
+    // Return first control input
+    return u_opt.empty() ? 0.0f : u_opt[0];
 }
 
 // ============================================================================

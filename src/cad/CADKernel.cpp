@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstring>
 #include <cmath>
+#include <unordered_set>
 
 namespace mechatron {
 
@@ -85,14 +86,22 @@ void MeshData::unify_vertices(float tolerance) {
         }
     }
 
-    // Remap triangles
+    std::vector<Triangle> remapped_triangles;
+    remapped_triangles.reserve(triangles.size());
     for (auto& tri : triangles) {
-        tri.v0 = vertex_remap[tri.v0];
-        tri.v1 = vertex_remap[tri.v1];
-        tri.v2 = vertex_remap[tri.v2];
+        if (tri.v0 >= vertex_remap.size() || tri.v1 >= vertex_remap.size() || tri.v2 >= vertex_remap.size()) {
+            continue;
+        }
+        Triangle remapped{vertex_remap[tri.v0], vertex_remap[tri.v1], vertex_remap[tri.v2]};
+        if (remapped.v0 == remapped.v1 || remapped.v1 == remapped.v2 || remapped.v2 == remapped.v0) {
+            continue;
+        }
+        remapped_triangles.push_back(remapped);
     }
 
     vertices = unified_vertices;
+    triangles = std::move(remapped_triangles);
+    normals.clear();
 }
 
 // ============================================================================
@@ -641,7 +650,7 @@ bool CADKernel::export_step(const std::string& path, const MeshData& mesh) {
 }
 
 // ============================================================================
-// Boolean Operations (simplified placeholder)
+// Boolean Operations
 // ============================================================================
 
 bool CADKernel::union_meshes(const MeshData& a, const MeshData& b, MeshData& result) {
@@ -685,8 +694,38 @@ void CADKernel::simplify_mesh(MeshData& mesh, float target_ratio) {
 }
 
 void CADKernel::smooth_mesh(MeshData& mesh, int iterations) {
-    // TODO: Implement Laplacian smoothing
-    spdlog::warn("Mesh smoothing not yet implemented");
+    if (iterations <= 0 || mesh.vertices.empty() || mesh.triangles.empty()) return;
+
+    std::vector<std::unordered_set<uint32_t>> adjacency(mesh.vertices.size());
+    for (const auto& tri : mesh.triangles) {
+        if (tri.v0 >= mesh.vertices.size() || tri.v1 >= mesh.vertices.size() || tri.v2 >= mesh.vertices.size()) {
+            continue;
+        }
+        adjacency[tri.v0].insert(tri.v1);
+        adjacency[tri.v0].insert(tri.v2);
+        adjacency[tri.v1].insert(tri.v0);
+        adjacency[tri.v1].insert(tri.v2);
+        adjacency[tri.v2].insert(tri.v0);
+        adjacency[tri.v2].insert(tri.v1);
+    }
+
+    constexpr float lambda = 0.5f;
+    for (int iter = 0; iter < iterations; ++iter) {
+        std::vector<Vec3> next = mesh.vertices;
+        for (size_t i = 0; i < mesh.vertices.size(); ++i) {
+            if (adjacency[i].empty()) continue;
+            Vec3 avg{0, 0, 0};
+            for (uint32_t n : adjacency[i]) {
+                avg = avg + mesh.vertices[n];
+            }
+            avg = avg * (1.0f / static_cast<float>(adjacency[i].size()));
+            next[i] = mesh.vertices[i] + (avg - mesh.vertices[i]) * lambda;
+        }
+        mesh.vertices = std::move(next);
+    }
+
+    mesh.normals.clear();
+    mesh.calculate_normals();
 }
 
 } // namespace mechatron

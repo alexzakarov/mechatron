@@ -33,15 +33,17 @@ void TimeManager::stop() {
 }
 
 void TimeManager::step() {
-    m_state = SimulationState::Stepping;
-    // Immediately execute the step for single-step mode
+    // Advance logical time now and let the orchestrator consume exactly one
+    // simulation update on the next frame while the public state remains
+    // paused for the UI.
     m_sim_time_us += m_physics_step_us;
     m_tick++;
+    m_step_requested = true;
     m_state = SimulationState::Paused;
 }
 
 void TimeManager::update() {
-    if (m_state == SimulationState::Stopped) return;
+    if (m_state == SimulationState::Stopped || m_state == SimulationState::Paused) return;
 
     if (m_state == SimulationState::Stepping) {
         m_sim_time_us += m_physics_step_us;
@@ -62,6 +64,12 @@ void TimeManager::update() {
         m_sim_time_us += m_physics_step_us;
         m_tick++;
     }
+}
+
+bool TimeManager::consume_step_request() {
+    bool requested = m_step_requested;
+    m_step_requested = false;
+    return requested;
 }
 
 } // namespace mechatron

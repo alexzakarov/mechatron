@@ -16,24 +16,6 @@ SolenoidActuator::SolenoidActuator() {
 }
 
 float SolenoidActuator::calculate_force(float voltage) const {
-    if (!m_enabled || voltage <= 0.0f) return 0.0f;
-
-    // Solenoid force model: F = (N*I)^2 * mu0 * A / (2 * g^2)
-    // Simplified: F proportional to current^2
-
-    // Current: I = V / R (steady state, neglecting inductance for simplicity)
-    float current = voltage / m_resistance;
-
-    // Force proportional to (turns * current)^2
-    float force_constant = 1e-5f; // Magnetic constant (simplified)
-    float force = force_constant * m_turns * m_turns * current * current;
-
-    // Force decreases with plunger position (air gap increases)
-    // Model: F = F0 / (1 + position * factor)
-    float gap_factor = 1.0f + m_plunger_position * 10.0f;
-    force = force / gap_factor;
-
-    return force;
 }
 
 void SolenoidActuator::update(double dt) {
@@ -108,7 +90,11 @@ void SolenoidActuator::apply_to_physics(PhysicsBody* body) {
     if (!body || !m_enabled) return;
 
     // Apply linear force along local Y axis (upward push)
-    float force_magnitude = calculate_force(m_input * 5.0f);
+    float v_plus = 0.0f;
+    float v_gnd = 0.0f;
+    if (const float* val = m_power_port->get_value<float>()) v_plus = *val;
+    if (const float* val = m_gnd_port->get_value<float>()) v_gnd = *val;
+    float force_magnitude = calculate_force(v_plus - v_gnd);
     body->force_accumulator.y += force_magnitude;
 }
 
@@ -130,44 +116,35 @@ DCMotor::DCMotor() {
 
     // Calculate KV and KT from rating parameters
     m_kv = m_no_load_rpm / m_voltage_rating * (2.0f * M_PI / 60.0f); // rad/s/V
-    m_kt = m_stall_torque / (m_voltage_rating / 1.0f); // Simplified (assume 1 ohm)
+    m_kt = m_stall_torque; // Default model uses a 1A rated-load reference
 }
 
 float DCMotor::calculate_torque(float voltage, float angular_vel) const {
     if (!m_enabled) return 0.0f;
+    if (std::abs(voltage) < 1e-6f || m_voltage_rating <= 0.0f || m_no_load_rpm <= 0.0f) {
+        return 0.0f;
+    }
 
-    // Back EMF: Vemf = KV * omega
-    float back_emf = angular_vel / m_kv;
+    // Voltage-scaled DC motor line model:
+    //  - no-load speed is proportional to applied voltage
+    //  - stall torque is proportional to applied voltage
+    float voltage_ratio = std::abs(voltage) / m_voltage_rating;
+    float stall_torque_at_voltage = m_stall_torque * voltage_ratio;
+    float omega_no_load_at_voltage = (m_no_load_rpm * voltage_ratio) * (2.0f * M_PI / 60.0f);
 
-    // Voltage across resistance: V - Vemf
-    float effective_voltage = voltage - back_emf;
+    if (omega_no_load_at_voltage <= 1e-6f) {
+        return 0.0f;
+    }
 
-    // Current: I = V / R (simplified, assume R = 1 ohm)
-    float current = effective_voltage;
-
-    // Torque: T = KT * I
-    float torque = m_kt * current;
-
-    return torque;
+    float speed_ratio = std::abs(angular_vel) / omega_no_load_at_voltage;
+    speed_ratio = std::clamp(speed_ratio, 0.0f, 1.0f);
+    float torque_magnitude = stall_torque_at_voltage * (1.0f - speed_ratio);
+    float direction = (voltage >= 0.0f) ? 1.0f : -1.0f;
+    return torque_magnitude * direction;
 }
 
 void DCMotor::update(double dt) {
     if (!m_enabled) return;
-
-    // Check if circuit is complete: BOTH V+ and GND must be connected
-    // for current to flow. An unconnected pin means an open circuit.
-    bool v_plus_connected = (m_power_port && !m_power_port->connections().empty());
-    bool gnd_connected = (m_gnd_port && !m_gnd_port->connections().empty());
-
-    if (!v_plus_connected || !gnd_connected) {
-        // Open circuit - no current can flow, motor coasts to stop
-        m_angular_velocity *= 0.95f;
-        m_output_torque = 0.0f;
-
-        // Update port values with 0 (no current draw)
-        if (m_power_port) m_power_port->set_value(0.0f);
-        return;
-    }
 
     // Read voltage difference: V+ - GND (actual potential across motor)
     float v_plus = 0.0f, v_gnd = 0.0f;
@@ -191,12 +168,14 @@ void DCMotor::update(double dt) {
 
     m_angular_velocity += angular_accel * dt;
 
-    // Apply damping
-    float damping_factor = 0.95f;
+    // Apply damping (reduced from 0.95 to 0.99 for smoother operation)
+    // At 60 FPS, 0.99 means ~0.5% speed loss per frame
+    float damping_factor = 0.99f;
     m_angular_velocity *= damping_factor;
 
-    // Clamp to realistic max speed
-    float max_omega = m_no_load_rpm * (2.0f * M_PI / 60.0f); // rad/s
+    // Clamp to voltage-dependent max speed
+    float voltage_ratio = (m_voltage_rating > 0.0f) ? (std::abs(voltage) / m_voltage_rating) : 0.0f;
+    float max_omega = (m_no_load_rpm * voltage_ratio) * (2.0f * M_PI / 60.0f); // rad/s
     m_angular_velocity = std::max(-max_omega, std::min(max_omega, m_angular_velocity));
 
     // Update angle
@@ -219,7 +198,11 @@ void DCMotor::apply_to_physics(PhysicsBody* body) {
     if (!body || !m_enabled) return;
 
     // Apply torque around Y axis (vertical rotation)
-    m_output_torque = calculate_torque(m_input * m_voltage_rating, m_angular_velocity);
+    float v_plus = 0.0f;
+    float v_gnd = 0.0f;
+    if (const float* val = m_power_port->get_value<float>()) v_plus = *val;
+    if (const float* val = m_gnd_port->get_value<float>()) v_gnd = *val;
+    m_output_torque = calculate_torque(v_plus - v_gnd, m_angular_velocity);
     body->torque_accumulator.y += m_output_torque;
 }
 

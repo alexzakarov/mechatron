@@ -6,18 +6,21 @@
 #include <filesystem>
 #include <mutex>
 #include <cstring>
+#include <algorithm>
 
 #ifdef _WIN32
 #include <windows.h>
 #else
 #include <dlfcn.h>
+#include <unistd.h>  // For usleep
 #endif
 
-// Include ngspice shared header
-#ifdef _WIN32
-// Path to ngspice shared library - will be set dynamically
+// Include ngspice shared header if available
+#if MECHATRON_HAVE_NGSPICE
+  #include "ngspice/sharedspice.h"
 #else
-#include "ngspice/sharedspice.h"
+  // When ngspice is not available, stub implementations will be used
+  #pragma message("Ngspice support disabled - building without ngspice integration")
 #endif
 
 namespace mechatron {
@@ -72,6 +75,7 @@ NgspiceWrapper::NgspiceWrapper()
     , m_initialized(false)
     , m_simulation_running(false)
 {
+#if MECHATRON_HAVE_NGSPICE
     std::lock_guard<std::mutex> lock(g_ngspice_mutex);
 
     // First user loads the library
@@ -88,9 +92,16 @@ NgspiceWrapper::NgspiceWrapper()
     if (m_available) {
         g_ngspice_ref_count++;
     }
+#else
+    m_available = false;
+    m_initialized = false;
+    m_error = "ngspice support was not enabled during build. Recompile with MECHATRON_HAVE_NGSPICE=1 to enable ngspice integration.";
+    spdlog::warn(m_error);
+#endif
 }
 
 NgspiceWrapper::~NgspiceWrapper() {
+#if MECHATRON_HAVE_NGSPICE
     std::lock_guard<std::mutex> lock(g_ngspice_mutex);
 
     g_ngspice_ref_count--;
@@ -100,9 +111,11 @@ NgspiceWrapper::~NgspiceWrapper() {
         unload_library();
         g_ngspice_ref_count = 0;
     }
+#endif
 }
 
 bool NgspiceWrapper::load_library() {
+#if MECHATRON_HAVE_NGSPICE
 #ifdef _WIN32
     // Try to load libngspice-0.dll
     std::vector<std::string> dll_paths = {
@@ -117,7 +130,7 @@ bool NgspiceWrapper::load_library() {
         if (!path.empty()) {
             m_library_handle = LoadLibraryA(path.c_str());
             if (m_library_handle) {
-                spdlog::info("Loaded ngspice library from: {}", path);
+                spdlog::debug("Loaded ngspice library from: {}", path);
                 break;
             }
         }
@@ -146,12 +159,17 @@ bool NgspiceWrapper::load_library() {
         "libngspice.so",
         "/usr/lib/libngspice.so.0",
         "/usr/local/lib/libngspice.so.0"
+#ifdef __APPLE__
+        , "/opt/homebrew/lib/libngspice.dylib"
+        , "/usr/local/lib/libngspice.dylib"
+        , "libngspice.dylib"
+#endif
     };
 
     for (const auto& path : so_paths) {
         m_library_handle = dlopen(path.c_str(), RTLD_LAZY);
         if (m_library_handle) {
-            spdlog::info("Loaded ngspice library from: {}", path);
+            spdlog::debug("Loaded ngspice library from: {}", path);
             break;
         }
     }
@@ -173,7 +191,7 @@ bool NgspiceWrapper::load_library() {
 #endif
 
     // Verify all required functions
-    if (!g_ngspice.init || !g_ngspice.command) {
+    if (!g_ngspice.init || !g_ngspice.command || !g_ngspice.circ) {
         m_error = "Failed to get ngspice function pointers";
         spdlog::error(m_error);
         unload_library();
@@ -181,9 +199,14 @@ bool NgspiceWrapper::load_library() {
     }
 
     return true;
+#else
+    m_error = "ngspice support not enabled during build";
+    return false;
+#endif
 }
 
 void NgspiceWrapper::unload_library() {
+#if MECHATRON_HAVE_NGSPICE
     if (m_library_handle) {
 #ifdef _WIN32
         FreeLibrary((HMODULE)m_library_handle);
@@ -195,9 +218,11 @@ void NgspiceWrapper::unload_library() {
         // Reset function pointers
         g_ngspice = {};
     }
+#endif
 }
 
 bool NgspiceWrapper::init_ngspice() {
+#if MECHATRON_HAVE_NGSPICE
     if (!g_ngspice.init) {
         return false;
     }
@@ -227,8 +252,11 @@ bool NgspiceWrapper::init_ngspice() {
     g_ngspice.command(const_cast<char*>("set nobanner"));
 
     m_initialized = true;
-    spdlog::info("ngspice initialized successfully");
+    spdlog::debug("ngspice initialized successfully");
     return true;
+#else
+    return false;
+#endif
 }
 
 bool NgspiceWrapper::is_available() {
@@ -238,6 +266,7 @@ bool NgspiceWrapper::is_available() {
 SimulationResult NgspiceWrapper::simulate(const std::string& netlist,
                                           double duration,
                                           double time_step) {
+#if MECHATRON_HAVE_NGSPICE
     if (!m_available || !m_initialized) {
         SimulationResult result;
         result.success = false;
@@ -264,18 +293,26 @@ SimulationResult NgspiceWrapper::simulate(const std::string& netlist,
     // Add null terminator for ngSpice_Circ
     lines.push_back("");
 
-    spdlog::info("Simulating circuit with {} lines", lines.size() - 1);
+    spdlog::trace("Simulating circuit with {} lines", lines.size() - 1);
 
     // Run simulation
     SimulationResult result = run_simulation(lines);
 
     m_simulation_running = false;
     return result;
+#else
+    SimulationResult result;
+    result.success = false;
+    result.error = "ngspice support not enabled during build. Recompile with MECHATRON_HAVE_NGSPICE=1.";
+    spdlog::error(result.error);
+    return result;
+#endif
 }
 
 SimulationResult NgspiceWrapper::simulate_file(const std::string& netlist_path,
                                                double duration,
                                                double time_step) {
+#if MECHATRON_HAVE_NGSPICE
     // Read file content
     std::ifstream file(netlist_path);
     if (!file.is_open()) {
@@ -290,9 +327,17 @@ SimulationResult NgspiceWrapper::simulate_file(const std::string& netlist_path,
     file.close();
 
     return simulate(buffer.str(), duration, time_step);
+#else
+    SimulationResult result;
+    result.success = false;
+    result.error = "ngspice support not enabled during build";
+    spdlog::error(result.error);
+    return result;
+#endif
 }
 
 SimulationResult NgspiceWrapper::run_simulation(const std::vector<std::string>& netlist_lines) {
+#if MECHATRON_HAVE_NGSPICE
     SimulationResult result;
     result.success = false;
 
@@ -303,7 +348,7 @@ SimulationResult NgspiceWrapper::run_simulation(const std::vector<std::string>& 
 
     // Separate netlist into circuit lines and simulation command
     std::vector<std::string> circuit_lines;
-    std::string tran_cmd;
+    std::string analysis_cmd;
 
     for (const auto& line : netlist_lines) {
         std::string trimmed = line;
@@ -322,138 +367,159 @@ SimulationResult NgspiceWrapper::run_simulation(const std::vector<std::string>& 
         }
 
         if (trimmed.find(".end") == 0 || trimmed.find(".END") == 0) {
-            continue;  // Skip .end
+            // Only skip if it's ".end" (not ".ends")
+            size_t len = trimmed.length();
+            if (len == 4 ||  // Exactly ".end"
+                (len >= 5 && (trimmed[4] == ' ' || trimmed[4] == '\t' || trimmed[4] == '\0'))) {  // ".end " with space/param
+                continue;  // Skip .end (but not .ends)
+            }
         }
 
-        // Extract .tran command, but keep .model and other dot commands
-        if (trimmed.find(".tran") == 0 || trimmed.find(".TRAN") == 0) {
-            tran_cmd = trimmed;
+        // Extract analysis commands, but keep .model/.subckt and other dot commands.
+        if (trimmed.find(".tran") == 0 || trimmed.find(".TRAN") == 0 ||
+            trimmed.find(".op") == 0 || trimmed.find(".OP") == 0 ||
+            trimmed.find(".dc") == 0 || trimmed.find(".DC") == 0 ||
+            trimmed.find(".ac") == 0 || trimmed.find(".AC") == 0) {
+            analysis_cmd = trimmed;
             continue;  // Don't add .tran to circuit
         }
 
         circuit_lines.push_back(trimmed);
     }
 
-    // Build full netlist string
-    std::string netlist_str;
-    for (const auto& line : circuit_lines) {
-        if (!line.empty()) {
-            netlist_str += line + "\n";
-        }
+    // Prepare ngSpice_Circ input (circuit only; analysis is issued via ngSpice_Command).
+    std::vector<std::string> circ_lines = circuit_lines;
+    circ_lines.push_back(".end");
+    circ_lines.push_back("");
+
+    // Hash circuit portion to avoid re-loading it when unchanged.
+    std::string hash_basis;
+    hash_basis.reserve(4096);
+    for (const auto& l : circ_lines) {
+        hash_basis.append(l);
+        hash_basis.push_back('\n');
     }
-    netlist_str += ".end\n";
+    const size_t net_hash = std::hash<std::string>{}(hash_basis);
 
-    // Write to temporary file
-    std::string temp_file = "temp_circuit.cir";
-    std::ofstream ofs(temp_file);
-    ofs << netlist_str;
-    ofs.close();
+    const bool need_reload = (!m_has_loaded_netlist) || (net_hash != m_loaded_netlist_hash);
+    if (need_reload) {
+        g_ngspice.command(const_cast<char*>("reset"));
 
-    spdlog::info("Wrote netlist to {}", temp_file);
+        std::vector<char*> cstrs;
+        cstrs.reserve(circ_lines.size() + 1);
+        for (auto& s : circ_lines) {
+            cstrs.push_back(const_cast<char*>(s.c_str()));
+        }
+        cstrs.push_back(nullptr);
 
-    // Load circuit using source command
-    std::string source_cmd = "source " + temp_file;
-    spdlog::info("Loading circuit: {}", source_cmd);
-    g_ngspice.command(const_cast<char*>(source_cmd.c_str()));
-    spdlog::info("Circuit loaded, output: {}", m_output_buffer);
+        if (spdlog::should_log(spdlog::level::trace)) {
+            spdlog::trace("[NGSPICE] Loading circuit ({} lines)", circ_lines.size() - 1);
+        }
+        g_ngspice.circ(cstrs.data());
+
+        m_loaded_netlist_hash = net_hash;
+        m_has_loaded_netlist = true;
+    }
+
+    // If ngspice reported a load error through stdout, abort early.
+    if (m_output_buffer.find("Error") != std::string::npos ||
+        m_output_buffer.find("ERROR") != std::string::npos) {
+        spdlog::error("[Ngspice] Failed to load circuit: {}", m_output_buffer);
+        m_simulation_running = false;
+        result.success = false;
+        result.error = "Failed to load circuit: " + m_output_buffer;
+        return result;
+    }
 
     // Run the simulation command
-    if (!tran_cmd.empty()) {
-        // Remove the leading dot from .tran and use as command
-        std::string cmd = tran_cmd;
-        if (cmd.find(".tran") == 0) {
-            cmd = "tran" + cmd.substr(5);
-        } else if (cmd.find(".TRAN") == 0) {
-            cmd = "tran" + cmd.substr(5);
-        }
-        spdlog::info("Running simulation: {}", cmd);
+    if (!analysis_cmd.empty()) {
+        // Remove the leading dot and use as an interactive ngspice command.
+        std::string cmd = analysis_cmd.substr(1);
+        spdlog::debug("Running simulation: {}", cmd);
         g_ngspice.command(const_cast<char*>(cmd.c_str()));
     } else {
-        // Default transient analysis if no .tran specified
-        spdlog::info("No .tran command found, running default");
-        g_ngspice.command(const_cast<char*>("tran 10u 10m"));
+        // Require explicit analysis specification
+        spdlog::error("[Ngspice] No analysis command (.tran, .ac, .dc, etc.) found in netlist");
+        spdlog::error("[Ngspice] Please specify the analysis type explicitly (e.g., '.tran 10u 10m' for transient analysis)");
+        m_simulation_running = false;
+        result.success = false;
+        result.error = "No analysis command found in netlist. Please specify .tran, .ac, .dc, or other analysis type.";
+        return result;
     }
 
-    // Wait for simulation to complete (with timeout)
-    int timeout = 60;  // 60 seconds for complex circuits
-    int elapsed = 0;
-    int checks_since_last_data = 0;
-
-    while (elapsed < timeout * 10) {
-        // Check both ngSpice_running() and our m_simulation_running flag
-        int running = 0;
-        if (g_ngspice.running) {
-            running = g_ngspice.running();
-        }
-
-        // Check if simulation is complete (both should indicate not running)
-        if (running == 0 && !m_simulation_running) {
-            spdlog::info("Simulation completed after {}s", elapsed / 10.0);
-            break;
-        }
-
+    // Wait for completion only when ngspice reports background running.
+    // .op completes synchronously; avoid polling sleeps for it.
+    const bool is_op = (analysis_cmd.rfind(".op", 0) == 0) || (analysis_cmd.rfind(".OP", 0) == 0);
+    if (!is_op && g_ngspice.running && g_ngspice.running() != 0) {
+        const int timeout_s = 10;
+        int spins = 0;
+        while (g_ngspice.running() != 0 && spins < timeout_s * 10) {
 #ifdef _WIN32
-        Sleep(100);
+            Sleep(100);
 #else
-        usleep(100000);
+            usleep(100000);
 #endif
-        elapsed++;
-        checks_since_last_data++;
-
-        // Log progress periodically
-        if (elapsed % 50 == 0) {
-            spdlog::debug("Waiting... running={}, bg_running={}, elapsed={}s",
-                          running, m_simulation_running, elapsed / 10);
+            spins++;
         }
-
-        // If we've collected data and simulation seems stuck, check if data has stopped arriving
-        if (elapsed > 20 && !m_simulation_data.empty()) {
-            if (checks_since_last_data > 50) {  // No new data for 5 seconds
-                spdlog::info("No new data for 5s, assuming simulation complete");
-                break;
-            }
+        if (spins >= timeout_s * 10) {
+            spdlog::warn("[Ngspice] Still running after {}s, continuing with collected data", timeout_s);
         }
     }
 
-    if (elapsed >= timeout * 10) {
-        m_error = "Simulation timeout after " + std::to_string(timeout) + " seconds";
-        result.error = m_error;
-        spdlog::error("{}", m_error);
-        spdlog::error("ngspice output: {}", m_output_buffer);
-        spdlog::error("Collected {} data points before timeout", m_simulation_data.size());
-        // Don't return immediately - try to use what we have
-    }
-
-    // Give ngspice time to finalize
+    // Give ngspice time to finalize only when callbacks did not provide data.
+    if (m_simulation_data.empty()) {
 #ifdef _WIN32
-    Sleep(200);
+        Sleep(200);
 #else
-    usleep(200000);
+        usleep(200000);
 #endif
+    }
 
     // If we have data from callbacks, use it. Otherwise try ngGet_Vec_Info.
     if (!m_simulation_data.empty()) {
         result.time_points = m_simulation_data;
         result.nodes = m_node_names;
         result.success = true;
-        spdlog::info("Using {} time points collected from callbacks", m_simulation_data.size());
+
+        if (spdlog::should_log(spdlog::level::trace)) {
+            spdlog::trace("[NGSPICE] Returning {} time points (callbacks)", m_simulation_data.size());
+        }
     } else {
-        // Fallback to collecting data via ngGet_Vec_Info
-        collect_simulation_data();
-        if (!m_simulation_data.empty()) {
-            result.time_points = m_simulation_data;
-            result.nodes = m_node_names;
-            result.success = true;
+        // No data collected - check for simulation errors
+        if (m_output_buffer.find("singular matrix") != std::string::npos ||
+            m_output_buffer.find("Error") != std::string::npos ||
+            m_output_buffer.find("failed") != std::string::npos) {
+            result.success = false;
+            result.error = "Simulation failed: " + m_output_buffer;
+            spdlog::warn("[NGSPICE] Simulation failed - circuit may be incomplete or invalid");
         } else {
-            result.error = "No simulation data collected. Output: " + m_output_buffer;
-            spdlog::warn("No data collected");
+            // Fallback to collecting data via ngGet_Vec_Info
+            spdlog::warn("[Ngspice] No data from callbacks, attempting fallback data collection");
+            collect_simulation_data();
+            if (!m_simulation_data.empty()) {
+                result.time_points = m_simulation_data;
+                result.nodes = m_node_names;
+                result.success = true;
+                spdlog::debug("Fallback collection successful: {} time points", m_simulation_data.size());
+            } else {
+                result.error = "No simulation data collected. Output: " + m_output_buffer;
+                spdlog::error("[Ngspice] Data collection failed - no simulation data available");
+                spdlog::error("[Ngspice] Possible issues: simulation didn't complete, netlist errors, or vector name mismatch");
+            }
         }
     }
 
     return result;
+#else
+    SimulationResult result;
+    result.success = false;
+    result.error = "ngspice support not enabled during build";
+    return result;
+#endif
 }
 
 void NgspiceWrapper::collect_simulation_data() {
+#if MECHATRON_HAVE_NGSPICE
     if (!g_ngspice.all_vecs) {
         spdlog::warn("all_vecs function not available");
         return;
@@ -470,7 +536,7 @@ void NgspiceWrapper::collect_simulation_data() {
         return;
     }
 
-    spdlog::debug("Current plot: {}", cur_plot);
+    spdlog::trace("Current plot: {}", cur_plot);
 
     // Get all vectors in current plot
     char** all_vecs = g_ngspice.all_vecs(cur_plot);
@@ -483,7 +549,7 @@ void NgspiceWrapper::collect_simulation_data() {
     std::vector<std::string> vec_names;
     for (int i = 0; all_vecs[i] != nullptr; i++) {
         vec_names.push_back(all_vecs[i]);
-        spdlog::debug("Vector: {}", all_vecs[i]);
+        spdlog::trace("Vector: {}", all_vecs[i]);
     }
 
     if (vec_names.empty()) {
@@ -511,7 +577,7 @@ void NgspiceWrapper::collect_simulation_data() {
     m_node_names = vec_names;
     int num_points = time_vec->v_length;
 
-    spdlog::debug("Time vector has {} points", num_points);
+    spdlog::trace("Time vector has {} points", num_points);
 
     for (int i = 0; i < num_points; i++) {
         double t = time_vec->v_realdata[i];
@@ -533,8 +599,9 @@ void NgspiceWrapper::collect_simulation_data() {
         m_simulation_data.push_back({t, voltages});
     }
 
-    spdlog::info("Collected {} time points with {} vectors each",
-                 m_simulation_data.size(), m_node_names.size());
+    spdlog::trace("Collected {} time points with {} vectors each",
+                  m_simulation_data.size(), m_node_names.size());
+#endif
 }
 
 std::string NgspiceWrapper::generate_netlist(
@@ -571,18 +638,23 @@ int NgspiceWrapper::send_char(char* output, int id, void* user_data) {
     NgspiceWrapper* wrapper = static_cast<NgspiceWrapper*>(user_data);
     if (wrapper) {
         wrapper->m_output_buffer += output;
-        spdlog::debug("[ngspice] {}", output);
+        spdlog::trace("[ngspice] {}", output);
     }
     return 0;
 }
 
 int NgspiceWrapper::send_stat(char* status, int id, void* user_data) {
-    spdlog::debug("[ngspice status] {}", status);
+    spdlog::trace("[ngspice status] {}", status);
     return 0;
 }
 
 int NgspiceWrapper::controlled_exit(int exit_status, bool immediate, bool quit, int id, void* user_data) {
-    spdlog::info("[ngspice] Exit requested: status={}, immediate={}, quit={}", exit_status, immediate, quit);
+    spdlog::debug("[ngspice] Exit requested: status={}, immediate={}, quit={}", exit_status, immediate, quit);
+    NgspiceWrapper* wrapper = static_cast<NgspiceWrapper*>(user_data);
+    if (wrapper) {
+        spdlog::debug("[ngspice] Setting m_simulation_running = false");
+        wrapper->m_simulation_running = false;
+    }
     return 0;
 }
 
@@ -595,7 +667,7 @@ int NgspiceWrapper::send_data(pvecvaluesall data, int num_vecs, int id, void* us
     // data is vecvaluesall*, containing actual simulation data points
     // vecsa is an array of vecvalues*, one per vector
     // Each vecvalues contains: name, creal, cimag, is_scale, is_complex
-    spdlog::debug("send_data called: veccount={}, vecindex={}", data->veccount, data->vecindex);
+    // spdlog::debug("send_data called: veccount={}, vecindex={}", data->veccount, data->vecindex);  // Disabled for performance
 
     // Find time vector and extract time point
     double time_val = 0.0;
@@ -608,8 +680,10 @@ int NgspiceWrapper::send_data(pvecvaluesall data, int num_vecs, int id, void* us
         std::string vec_name = vv->name;
         double value = vv->creal;
 
-        if (vv->is_scale) {
-            // This is the time/scale vector
+        if (vv->is_scale && vec_name == "time") {
+            // This is the transient time vector. Operating-point analyses may
+            // mark a voltage vector as scale, so only the actual time vector
+            // should be excluded from node/current collection.
             time_val = value;
         } else {
             // This is a voltage/current value
@@ -643,22 +717,22 @@ int NgspiceWrapper::send_data(pvecvaluesall data, int num_vecs, int id, void* us
         wrapper->m_simulation_data.push_back({time_val, voltages});
     }
 
-    spdlog::debug("Collected time point {}: {} voltages", time_val, voltages.size());
+    // spdlog::debug("Collected time point {}: {} voltages", time_val, voltages.size());  // Disabled for performance
 
     return 0;
 }
 
 int NgspiceWrapper::send_init_data(pvecinfoall vec_info, int id, void* user_data) {
-    spdlog::debug("[ngspice] Init data received: plot={}, veccount={}",
+    spdlog::trace("[ngspice] Init data received: plot={}, veccount={}",
                   vec_info ? vec_info->name : "null", vec_info ? vec_info->veccount : 0);
 
     // Store vector info for later data collection
     NgspiceWrapper* wrapper = static_cast<NgspiceWrapper*>(user_data);
     if (wrapper && vec_info) {
-        spdlog::debug("Vectors in plot:");
+        spdlog::trace("Vectors in plot:");
         for (int i = 0; i < vec_info->veccount; i++) {
             if (vec_info->vecs && vec_info->vecs[i]) {
-                spdlog::debug("  {}: {}", i, vec_info->vecs[i]->vecname);
+                spdlog::trace("  {}: {}", i, vec_info->vecs[i]->vecname);
             }
         }
     }
@@ -669,7 +743,7 @@ int NgspiceWrapper::bg_thread_running(bool is_running, int id, void* user_data) 
     NgspiceWrapper* wrapper = static_cast<NgspiceWrapper*>(user_data);
     if (wrapper) {
         wrapper->m_simulation_running = is_running;
-        spdlog::debug("[ngspice] Background thread running: {}", is_running);
+        spdlog::trace("[ngspice] Background thread running: {}", is_running);
     }
     return 0;
 }
@@ -773,9 +847,418 @@ void NetlistBuilder::add_bjt(const std::string& name,
                           node_emitter + " " + model);
 }
 
+void NetlistBuilder::add_mosfet(const std::string& name,
+                               const std::string& node_drain,
+                               const std::string& node_gate,
+                               const std::string& node_source,
+                               const std::string& node_bulk,
+                               const std::string& model,
+                               double length,
+                               double width) {
+    // MOSFET: M<name> <nd> <ng> <ns> <nb> <model> L=<length> W=<width>
+    std::stringstream ss;
+    ss << name << " " << node_drain << " " << node_gate << " " << node_source << " "
+       << node_bulk << " " << model << " L=" << length << " W=" << width;
+    m_components.push_back(ss.str());
+}
+
+void NetlistBuilder::add_jfet(const std::string& name,
+                             const std::string& node_drain,
+                             const std::string& node_gate,
+                             const std::string& node_source,
+                             const std::string& model) {
+    m_components.push_back(name + " " + node_drain + " " + node_gate + " " +
+                          node_source + " " + model);
+}
+
+void NetlistBuilder::add_opamp(const std::string& name,
+                              const std::string& node_non_inv,
+                              const std::string& node_inv,
+                              const std::string& node_vcc,
+                              const std::string& node_vee,
+                              const std::string& node_out,
+                              const std::string& model) {
+    // Op-amps are implemented as subcircuits
+    // Format: X<name> <nodes> <subcircuit_name>
+    std::string nodes = node_non_inv + " " + node_inv + " " + node_vcc + " " +
+                       node_vee + " " + node_out;
+    add_subcircuit(name, model, {node_non_inv, node_inv, node_vcc, node_vee, node_out});
+}
+
+void NetlistBuilder::add_dc_current(const std::string& name,
+                                   const std::string& node_pos,
+                                   const std::string& node_neg,
+                                   double current) {
+    m_components.push_back(name + " " + node_pos + " " + node_neg + " " +
+                          std::to_string(current));
+}
+
+void NetlistBuilder::add_sine_voltage(const std::string& name,
+                                     const std::string& node_pos,
+                                     const std::string& node_neg,
+                                     double offset,
+                                     double amplitude,
+                                     double frequency) {
+    // SIN(<vo> <va> <freq>)
+    std::stringstream ss;
+    ss << name << " " << node_pos << " " << node_neg << " DC 0 SIN("
+       << offset << " " << amplitude << " " << frequency << ")";
+    m_components.push_back(ss.str());
+}
+
+void NetlistBuilder::add_pulse_current(const std::string& name,
+                                      const std::string& node_pos,
+                                      const std::string& node_neg,
+                                      double i_low, double i_high,
+                                      double delay, double rise_time, double fall_time,
+                                      double pulse_width, double period) {
+    std::stringstream ss;
+    ss << name << " " << node_pos << " " << node_neg << " DC 0 PULSE("
+       << i_low << " " << i_high << " "
+       << delay << " " << rise_time << " " << fall_time << " "
+       << pulse_width << " " << period << ")";
+    m_components.push_back(ss.str());
+}
+
+void NetlistBuilder::add_transformer(const std::string& name,
+                                    const std::string& inductor1,
+                                    const std::string& inductor2,
+                                    double coupling_coefficient) {
+    // Coupling: K<name> <L1> <L2> <k>
+    std::string k_name = "K_" + name;
+    m_components.push_back(k_name + " " + inductor1 + " " + inductor2 + " " +
+                          std::to_string(coupling_coefficient));
+}
+
+void NetlistBuilder::add_vswitch(const std::string& name,
+                                const std::string& node_pos,
+                                const std::string& node_neg,
+                                const std::string& node_ctrl_pos,
+                                const std::string& node_ctrl_neg,
+                                const std::string& model) {
+    // Add switch model if not already present
+    bool model_exists = false;
+    for (const auto& m : m_models) {
+        if (m.find(".model " + model) == 0) {
+            model_exists = true;
+            break;
+        }
+    }
+    if (!model_exists) {
+        m_models.push_back(".model " + model + " SW(Ron=0.01 Roff=1e9 Vt=0.5 Vh=0)");
+    }
+    m_components.push_back(name + " " + node_pos + " " + node_neg + " " +
+                          node_ctrl_pos + " " + node_ctrl_neg + " " + model);
+}
+
+void NetlistBuilder::add_cswitch(const std::string& name,
+                                const std::string& node_pos,
+                                const std::string& node_neg,
+                                const std::string& controlling_source,
+                                const std::string& model) {
+    // Add switch model if not already present
+    bool model_exists = false;
+    for (const auto& m : m_models) {
+        if (m.find(".model " + model) == 0) {
+            model_exists = true;
+            break;
+        }
+    }
+    if (!model_exists) {
+        m_models.push_back(".model " + model + " CSW(Ron=0.01 Roff=1e9 It=0.1 Ih=0)");
+    }
+    m_components.push_back(name + " " + node_pos + " " + node_neg + " " +
+                          controlling_source + " " + model);
+}
+
+void NetlistBuilder::add_resistor_tc(const std::string& name,
+                                    const std::string& node1,
+                                    const std::string& node2,
+                                    double resistance,
+                                    double temp_coeff,
+                                    double nominal_temp) {
+    // R<name> <n1> <n2> <value> TC=<tc1> TC=<tc2>
+    std::stringstream ss;
+    ss << name << " " << node1 << " " << node2 << " " << resistance;
+    if (temp_coeff != 0.0) {
+        ss << " TC=" << temp_coeff << ",0";
+    }
+    m_components.push_back(ss.str());
+}
+
+void NetlistBuilder::add_capacitor_ic(const std::string& name,
+                                     const std::string& node1,
+                                     const std::string& node2,
+                                     double capacitance,
+                                     double initial_voltage) {
+    // C<name> <n1> <n2> <value> IC=<initial_voltage>
+    std::stringstream ss;
+    ss << name << " " << node1 << " " << node2 << " " << capacitance;
+    if (initial_voltage != 0.0) {
+        ss << " IC=" << initial_voltage;
+    }
+    m_components.push_back(ss.str());
+}
+
+void NetlistBuilder::add_inductor_ic(const std::string& name,
+                                    const std::string& node1,
+                                    const std::string& node2,
+                                    double inductance,
+                                    double initial_current) {
+    // L<name> <n1> <n2> <value> IC=<initial_current>
+    std::stringstream ss;
+    ss << name << " " << node1 << " " << node2 << " " << inductance;
+    if (initial_current != 0.0) {
+        ss << " IC=" << initial_current;
+    }
+    m_components.push_back(ss.str());
+}
+
+void NetlistBuilder::add_subcircuit(const std::string& name,
+                                   const std::string& subcircuit_name,
+                                   const std::vector<std::string>& nodes,
+                                   const std::vector<std::pair<std::string, double>>& parameters) {
+    // X<name> <node1> <node2> ... <subcircuit_name> [params]
+    std::stringstream ss;
+    ss << "X" << name << " ";  // CRITICAL: Add 'X' prefix for subcircuit calls!
+    for (const auto& node : nodes) {
+        ss << node << " ";
+    }
+    ss << subcircuit_name;
+
+    // Add optional parameters
+    for (const auto& param : parameters) {
+        ss << " " << param.first << "=" << param.second;
+    }
+
+    m_components.push_back(ss.str());
+}
+
+void NetlistBuilder::add_motor_driver(const std::string& name,
+                                     const std::string& node_vcc,
+                                     const std::string& node_gnd,
+                                     const std::string& node_in1,
+                                     const std::string& node_in2,
+                                     const std::string& node_in3,
+                                     const std::string& node_in4,
+                                     const std::string& node_out1,
+                                     const std::string& node_out2,
+                                     const std::string& mosfet_model) {
+    std::string subckt_name = "MOTOR_DRIVER_PWM_DIR";
+    bool subckt_exists = false;
+    for (const auto& m : m_models) {
+        if (m.find(".subckt " + subckt_name) == 0) {
+            subckt_exists = true;
+            break;
+        }
+    }
+
+    if (!subckt_exists) {
+        std::stringstream subckt;
+        subckt << ".subckt " << subckt_name << " VCC GND PWM DIR EN UNUSED OUT1 OUT2\n";
+        subckt << "R_PWM PWM GND 1e9\n";
+        subckt << "R_DIR DIR GND 1e9\n";
+        subckt << "R_EN EN GND 1e9\n";
+        subckt << "R_UNUSED UNUSED GND 1e9\n";
+        subckt << "R_LOAD1 OUT1 GND 1e6\n";
+        subckt << "R_LOAD2 OUT2 GND 1e6\n";
+        subckt << "B_OUT1 OUT1 GND V=V(VCC,GND)/(1+exp(-8*(V(EN,GND)-2.5)))/(1+exp(-8*(V(PWM,GND)-2.5)))*(1-1/(1+exp(-8*(V(DIR,GND)-2.5))))\n";
+        subckt << "B_OUT2 OUT2 GND V=V(VCC,GND)/(1+exp(-8*(V(EN,GND)-2.5)))/(1+exp(-8*(V(PWM,GND)-2.5)))/(1+exp(-8*(V(DIR,GND)-2.5)))\n";
+        subckt << ".ends\n";
+        m_models.push_back(subckt.str());
+    }
+
+    // Add subcircuit instance
+    add_subcircuit(name, subckt_name,
+                   {node_vcc, node_gnd, node_in1, node_in2, node_in3, node_in4, node_out1, node_out2});
+}
+
+void NetlistBuilder::add_h_bridge(const std::string& name,
+                                  const std::string& node_vcc,
+                                  const std::string& node_gnd,
+                                  const std::string& node_in1,
+                                  const std::string& node_in2,
+                                  const std::string& node_en,
+                                  const std::string& node_out1,
+                                  const std::string& node_out2) {
+    std::string subckt_name = "HBRIDGE_LOGIC";
+    bool subckt_exists = false;
+    for (const auto& m : m_models) {
+        if (m.find(".subckt " + subckt_name) == 0) {
+            subckt_exists = true;
+            break;
+        }
+    }
+
+    if (!subckt_exists) {
+        std::stringstream subckt;
+        subckt << ".subckt " << subckt_name << " VCC GND IN1 IN2 EN OUT1 OUT2\n";
+        subckt << "R_IN1 IN1 GND 1e9\n";
+        subckt << "R_IN2 IN2 GND 1e9\n";
+        subckt << "R_EN EN GND 1e9\n";
+        subckt << "R_LOAD1 OUT1 GND 1e6\n";
+        subckt << "R_LOAD2 OUT2 GND 1e6\n";
+        subckt << "B_OUT1 OUT1 GND V=V(VCC,GND)/(1+exp(-8*(V(EN,GND)-2.5)))/(1+exp(-8*(V(IN1,GND)-2.5)))\n";
+        subckt << "B_OUT2 OUT2 GND V=V(VCC,GND)/(1+exp(-8*(V(EN,GND)-2.5)))/(1+exp(-8*(V(IN2,GND)-2.5)))\n";
+        subckt << ".ends\n";
+        m_models.push_back(subckt.str());
+    }
+
+    add_subcircuit(name, subckt_name,
+                   {node_vcc, node_gnd, node_in1, node_in2, node_en, node_out1, node_out2});
+}
+
+void NetlistBuilder::add_buck_converter(const std::string& name,
+                                      const std::string& node_vin,
+                                      const std::string& node_gnd,
+                                      const std::string& node_vout,
+                                      double inductance,
+                                      double capacitance,
+                                      double switching_freq,
+                                      const std::string& mosfet_model,
+                                      double duty_cycle) {
+    // For buck converter, use PMOS for high-side switching
+    // If default NMOS_PWR is specified, use PMOS_PWR instead
+    std::string actual_model = (mosfet_model == "NMOS_PWR") ? "PMOS_PWR" : mosfet_model;
+
+    // Generate buck converter subcircuit
+    // Use a single shared subcircuit for all buck converters
+    std::string subckt_name = "BUCK_CONV";
+
+    // Check if subcircuit already exists
+    bool subckt_exists = false;
+    for (const auto& m : m_models) {
+        if (m.find(".subckt " + subckt_name) == 0) {
+            subckt_exists = true;
+            break;
+        }
+    }
+
+    if (!subckt_exists) {
+        std::stringstream subckt;
+
+        // Calculate PWM pulse parameters from switching frequency
+        double period = 1.0 / switching_freq;  // Period in seconds
+        duty_cycle = std::clamp(duty_cycle, 0.0, 0.95);
+        double pulse_width = period * duty_cycle;  // ON time
+
+        // Ensure minimum pulse width (at least 1ns)
+        if (pulse_width < 1e-9) pulse_width = 1e-9;
+
+        // For a real buck converter: Vout = Vin * Duty_Cycle
+        // With 50% duty: Vout = 0.5 * Vin
+        //
+        // Standard Buck Topology:
+        // VIN ──[PMOS high-side switch]──SW───L_FILTER───VOUT
+        //         │                        │
+        //        PWM                     C_FILTER
+        //         │                        │
+        //        GND                       │
+        //                                R_LOAD
+        //                                 │
+        //                                GND
+        //
+        // When PWM=0V: PMOS ON, SW connects to VIN, inductor charges
+        // When PWM=5V: PMOS OFF, inductor discharges through diode
+
+        subckt << ".subckt " << subckt_name << " VIN GND VOUT params: DUTY=0.5 CVAL=100u ROUT=0.5\n";
+
+        // Simplified regulated buck output with finite output impedance. It is
+        // low enough to regulate under normal loads while still avoiding the
+        // unrealistic near-ideal source behavior that produced huge fault
+        // currents when VOUT was externally back-driven.
+        subckt << "V_IN_SENSE VIN VIN_INT 0\n";
+        subckt << "R_SENSE VIN_INT SENSE 1e9\n";
+        subckt << "E_BUCK VINT GND SENSE GND {DUTY}\n";
+        subckt << "R_OUT VINT VOUT {ROUT}\n";
+        subckt << "B_INPUT VIN_INT GND I={max(0, -DUTY*I(E_BUCK))}\n";
+
+        // Output filter capacitor
+        subckt << "C_FILTER VOUT GND {CVAL}\n";
+
+        // Load resistor (for simulation stability)
+        subckt << "R_LOAD VOUT GND 100k\n";
+
+        subckt << ".ends\n";
+
+        // Add the complete subcircuit definition
+        std::string subckt_str = subckt.str();
+        m_models.push_back(subckt_str);
+        spdlog::debug("[BuckConverter] Added subcircuit definition:\n{}", subckt_str);
+    }
+
+    // Add subcircuit instance - simplified interface: VIN, GND, VOUT only
+    // PWM is generated internally by the subcircuit
+    add_subcircuit(name, subckt_name,
+                   {node_vin, node_gnd, node_vout},
+                   {{"DUTY", duty_cycle}, {"CVAL", capacitance}, {"ROUT", 0.5}});
+}
+
+
+void NetlistBuilder::add_boost_converter(const std::string& name,
+                                      const std::string& node_vin,
+                                      const std::string& node_gnd,
+                                      const std::string& node_vout,
+                                      double inductance,
+                                      double capacitance,
+                                      double switching_freq,
+                                      const std::string& mosfet_model,
+                                      double duty_cycle) {
+    // Generate boost converter subcircuit
+    // Use a single shared subcircuit for all boost converters
+    std::string subckt_name = "BOOST_CONV";
+    duty_cycle = std::clamp(duty_cycle, 0.0, 0.95);
+    const double boost_gain = 1.0 / (1.0 - duty_cycle);
+
+    // Check if subcircuit already exists
+    bool subckt_exists = false;
+    for (const auto& m : m_models) {
+        if (m.find(".subckt " + subckt_name) == 0) {
+            subckt_exists = true;
+            break;
+        }
+    }
+
+    if (!subckt_exists) {
+        std::stringstream subckt;
+
+        subckt << ".subckt " << subckt_name << " VIN GND VOUT params: GAIN=2 CVAL=100u ROUT=0.01\n";
+
+        // Behavioral voltage source plus finite output impedance to avoid
+        // ideal source conflicts when output is externally forced.
+        subckt << "V_IN_SENSE VIN VIN_INT 0\n";
+        subckt << "R_SENSE VIN_INT SENSE 1e9\n";
+        subckt << "E_BOOST VINT GND SENSE GND {GAIN}\n";
+        subckt << "R_OUT VINT VOUT {ROUT}\n";
+        subckt << "B_INPUT VIN_INT GND I={max(0, -GAIN*I(E_BOOST))}\n";
+
+        // Output filter capacitor
+        subckt << "C_FILTER VOUT GND {CVAL}\n";
+
+        // Load resistor (for simulation stability)
+        subckt << "R_LOAD VOUT GND 1000\n";
+
+        subckt << ".ends\n";
+
+        // Add the complete subcircuit definition
+        std::string subckt_str = subckt.str();
+        m_models.push_back(subckt_str);
+        spdlog::debug("[BoostConverter] Added subcircuit definition:\n{}", subckt_str);
+    }
+
+    // Add subcircuit instance - simplified interface: VIN, GND, VOUT only
+    add_subcircuit(name, subckt_name,
+                   {node_vin, node_gnd, node_vout},
+                   {{"GAIN", boost_gain}, {"CVAL", capacitance}, {"ROUT", 0.01}});
+}
+
 void NetlistBuilder::add_simulation(const std::string& type,
                                    const std::string& parameters) {
-    m_commands.push_back("." + type + " " + parameters);
+    std::string command = "." + type;
+    if (!parameters.empty()) {
+        command += " " + parameters;
+    }
+    m_commands.push_back(command);
 }
 
 void NetlistBuilder::add_plot(const std::vector<std::string>& nodes) {
@@ -786,6 +1269,11 @@ void NetlistBuilder::add_plot(const std::vector<std::string>& nodes) {
     m_commands.push_back(cmd);
 }
 
+void NetlistBuilder::add_model(const std::string& model_def) {
+    m_models.push_back(model_def);
+    spdlog::debug("[NetlistBuilder] Added model ({} chars): '{}'", model_def.length(), model_def);
+}
+
 std::string NetlistBuilder::build() const {
     std::stringstream ss;
 
@@ -793,7 +1281,12 @@ std::string NetlistBuilder::build() const {
     ss << "* " << m_title << "\n";
 
     // Models
-    for (const auto& model : m_models) {
+    spdlog::debug("[NetlistBuilder] Building netlist with {} models", m_models.size());
+    for (size_t i = 0; i < m_models.size(); ++i) {
+        const auto& model = m_models[i];
+        spdlog::debug("[NetlistBuilder] Model {} ({} chars, starts with '{}', contains .ends: {})",
+                      i, model.length(), model.substr(0, std::min(size_t(20), model.length())),
+                      model.find(".ends") != std::string::npos);
         ss << model << "\n";
     }
 

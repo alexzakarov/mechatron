@@ -23,6 +23,19 @@ TEST(TimeManager, PauseStopsRunning) {
     EXPECT_EQ(tm.state(), SimulationState::Paused);
 }
 
+TEST(TimeManager, PausePreventsTickAdvance) {
+    TimeManager tm;
+    tm.start();
+    tm.pause();
+
+    auto tick_before = tm.current_tick();
+    auto time_before = tm.simulation_time();
+    tm.update();
+
+    EXPECT_EQ(tm.current_tick(), tick_before);
+    EXPECT_DOUBLE_EQ(tm.simulation_time(), time_before);
+}
+
 TEST(TimeManager, ResumeRestoresRunning) {
     TimeManager tm;
     tm.start();
@@ -46,6 +59,8 @@ TEST(TimeManager, SingleStep) {
     EXPECT_EQ(tm.state(), SimulationState::Paused);
     EXPECT_EQ(tm.current_tick(), 1u);
     EXPECT_DOUBLE_EQ(tm.simulation_time(), tm.physics_step_size());
+    EXPECT_TRUE(tm.consume_step_request());
+    EXPECT_FALSE(tm.consume_step_request());
 }
 
 TEST(TimeManager, MultipleSteps) {

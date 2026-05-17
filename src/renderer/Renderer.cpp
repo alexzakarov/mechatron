@@ -242,7 +242,9 @@ void Renderer::delete_framebuffer() {
 }
 
 void Renderer::bind_framebuffer() {
-    if (!m_fbo) return;
+    if (!m_fbo) {
+        return;
+    }
     glBindFramebuffer(GL_FRAMEBUFFER, m_fbo);
     glViewport(0, 0, m_fbo_width, m_fbo_height);
 }

@@ -7,6 +7,8 @@ add_library(mechatron_core STATIC
     ProjectFile.cpp
     MechatronProject.cpp
     CircuitPhysicsBridge.cpp
+    ComponentFactory.cpp
+    SystemConfig.cpp
 )
 
 target_include_directories(mechatron_core PUBLIC

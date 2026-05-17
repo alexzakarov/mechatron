@@ -33,18 +33,41 @@ public:
     // Port access for circuit integration
     std::vector<Port*> get_ports() override {
         std::vector<Port*> result;
-        if (m_power_port) result.push_back(m_power_port.get());
-        if (m_gnd_port) result.push_back(m_gnd_port.get());
-        if (m_signal_port) result.push_back(m_signal_port.get());
+        if (m_power_port) {
+            assign_port_owner(m_power_port.get());
+            result.push_back(m_power_port.get());
+        }
+        if (m_gnd_port) {
+            assign_port_owner(m_gnd_port.get());
+            result.push_back(m_gnd_port.get());
+        }
+        if (m_signal_port) {
+            assign_port_owner(m_signal_port.get());
+            result.push_back(m_signal_port.get());
+        }
         return result;
     }
 
     // Get input voltage from port
     float get_input_voltage() const {
+        float v_plus = 0.0f;
+        float v_gnd = 0.0f;
+        bool has_port_voltage = false;
         if (m_power_port) {
             if (const float* val = m_power_port->get_value<float>()) {
-                return *val;
+                v_plus = *val;
+                has_port_voltage = true;
             }
+        }
+        if (m_gnd_port) {
+            if (const float* val = m_gnd_port->get_value<float>()) {
+                v_gnd = *val;
+                has_port_voltage = true;
+            }
+        }
+
+        if (has_port_voltage) {
+            return v_plus - v_gnd;
         }
         return m_input;
     }
@@ -63,13 +86,16 @@ protected:
     void create_actuator_ports(bool has_signal = false) {
         m_power_port = std::make_unique<Port>("V+", PortDomain::Electrical, PortDirection::Input);
         m_power_port->set_value(0.0f);
+        assign_port_owner(m_power_port.get());
 
         m_gnd_port = std::make_unique<Port>("GND", PortDomain::Electrical, PortDirection::Input);
         m_gnd_port->set_value(0.0f);
+        assign_port_owner(m_gnd_port.get());
 
         if (has_signal) {
             m_signal_port = std::make_unique<Port>("SIG", PortDomain::Analog, PortDirection::Input);
             m_signal_port->set_value(0.0f);
+            assign_port_owner(m_signal_port.get());
         }
     }
 };
@@ -148,6 +174,11 @@ public:
     void set_no_load_speed(float rpm) { m_no_load_rpm = rpm; }
     void set_stall_torque(float nm) { m_stall_torque = nm; }
 
+    // Getters for motor parameters
+    float get_voltage_rating() const { return m_voltage_rating; }
+    float get_no_load_speed() const { return m_no_load_rpm; }
+    float get_stall_torque() const { return m_stall_torque; }
+
     // Get current state
     float get_angular_velocity() const { return m_angular_velocity; } // rad/s
     float get_rpm() const { return m_angular_velocity * 60.0f / (2.0f * M_PI); }
@@ -159,10 +190,17 @@ public:
     void attach_encoder(RotaryEncoder* encoder) { m_encoder = encoder; }
     RotaryEncoder* get_encoder() const { return m_encoder; }
 
+    // Motor specification presets
+    static float& default_no_load_rpm() {
+        static float def = 3000.0f;
+        return def;
+    }
+    static void set_default_no_load_rpm(float rpm) { default_no_load_rpm() = rpm; }
+
 private:
     // Motor parameters
     float m_voltage_rating = 12.0f;
-    float m_no_load_rpm = 3000.0f;
+    float m_no_load_rpm = default_no_load_rpm();
     float m_stall_torque = 0.5f;
 
     // Derived constants
@@ -212,12 +250,19 @@ public:
 
     void attach_body(PhysicsBody* body) { m_attached_body = body; }
 
+    // Servo specification presets
+    static float& default_max_speed() {
+        static float def = 300.0f;  // degrees/second
+        return def;
+    }
+    static void set_default_max_speed(float speed) { default_max_speed() = speed; }
+
 private:
     float m_min_angle = 0.0f;
     float m_max_angle = 180.0f;
     float m_target_angle = 90.0f;
     float m_current_angle = 90.0f;
-    float m_max_speed = 300.0f; // degrees/second
+    float m_max_speed = default_max_speed(); // degrees/second
     float m_max_torque = 2.0f;  // Nm
     float m_output_torque = 0.0f;
 };

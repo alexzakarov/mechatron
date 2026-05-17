@@ -9,6 +9,21 @@
 
 namespace mechatron {
 
+// Pin direction
+enum class PinDirection {
+    Input,
+    Output,
+    Bidirectional
+};
+
+// Pin type
+enum class PinType {
+    Digital,      // Digital logic (0/1)
+    Analog,       // Analog voltage (continuous)
+    Power,        // Power supply (VCC/GND)
+    Ground        // Ground reference
+};
+
 struct Vec3 {
     float x = 0, y = 0, z = 0;
 

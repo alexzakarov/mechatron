@@ -16,7 +16,7 @@ FirmwareLoader::FirmwareLoader()
 }
 
 bool FirmwareLoader::load(const std::string& path) {
-    spdlog::info("Loading firmware from: {}", path);
+    spdlog::debug("Loading firmware from: {}", path);
 
     // Clear previous data
     clear();
@@ -53,14 +53,14 @@ bool FirmwareLoader::load(const std::string& path) {
     build_memory_map();
 
     m_loaded = true;
-    spdlog::info("Firmware loaded: {} bytes, {} records",
+    spdlog::debug("Firmware loaded: {} bytes, {} records",
                  m_binary_data.size(), m_records.size());
 
     return true;
 }
 
 bool FirmwareLoader::load_from_string(const std::string& hex_data) {
-    spdlog::info("Loading firmware from string ({} bytes)", hex_data.size());
+    spdlog::debug("Loading firmware from string ({} bytes)", hex_data.size());
 
     // Clear previous data
     clear();
@@ -97,7 +97,7 @@ bool FirmwareLoader::load_from_string(const std::string& hex_data) {
     build_memory_map();
 
     m_loaded = true;
-    spdlog::info("Firmware loaded from string: {} bytes", m_binary_data.size());
+    spdlog::debug("Firmware loaded from string: {} bytes", m_binary_data.size());
 
     return true;
 }

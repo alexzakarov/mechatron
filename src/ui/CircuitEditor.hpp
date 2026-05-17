@@ -4,6 +4,7 @@
 #include <vector>
 #include <map>
 #include <imgui.h>
+#include "ui/SchematicSymbol.hpp"
 
 namespace mechatron {
 
@@ -12,6 +13,10 @@ class SimulationOrchestrator;
 class CircuitEditor {
 public:
     void render(SimulationOrchestrator& orchestrator);
+
+    // Oscilloscope open request (consumed by Viewport3D)
+    const std::string& oscilloscope_open_request() const { return m_oscilloscope_open_id; }
+    void clear_oscilloscope_open_request() { m_oscilloscope_open_id.clear(); }
 
 private:
     enum class PinDirection { None, Input, Output };
@@ -76,9 +81,13 @@ private:
     int m_next_node_num = 0;
     int m_next_wire_uid = 0;  // Wire UID generator
 
+    // Oscilloscope open request
+    std::string m_oscilloscope_open_id;
+
     void render_component_palette();
     void render_circuit_canvas();
     void render_properties_panel();
+    void render_symbol_editor(); // full-canvas symbol editor (edits per-type schematic symbol)
 
     void refresh_node_pins(CircuitNode& node);
 
@@ -102,6 +111,26 @@ private:
     void sync_selection_from_orchestrator();
 
     static std::pair<std::string, std::string> map_type_to_plugin(const std::string& type);
+
+    // Symbol editor state (per component type, stored as user override JSON).
+    bool m_symbol_editor_open = false;
+    bool m_symbol_edit_inplace = true; // when true, edit happens on the component container directly
+    std::string m_symbol_edit_type;
+    bool m_symbol_loaded = false;
+    bool m_symbol_dirty = false;
+    struct SymbolEditState {
+        struct SchematicSymbol sym;
+        int selected_prim = -1;
+        int drag_prim = -1;
+        int drag_point = -1; // 0 start, 1 end
+        std::string drag_pin;
+
+        bool add_line_mode = false;
+        bool add_rect_mode = false;
+        bool add_has_first = false;
+        float add_x0 = 0, add_y0 = 0;
+    };
+    std::unique_ptr<SymbolEditState> m_symbol_state;
 };
 
 } // namespace mechatron

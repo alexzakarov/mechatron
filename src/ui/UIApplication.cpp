@@ -66,6 +66,9 @@ bool UIApplication::init() {
     m_orchestrator->load_all_plugins();
 
     m_viewport.init();
+    m_viewport.set_circuit_editor(&m_circuit_editor);
+    m_viewport.set_code_editor(&m_code_editor);
+    m_viewport.set_model_editor(&m_model_editor);
 
     m_running = true;
     spdlog::info("MECHATRON initialized successfully");
@@ -126,39 +129,125 @@ void UIApplication::run() {
 
             if (ImGui::BeginMenu("View")) {
                 ImGui::MenuItem("ImGui Demo", nullptr, &m_show_demo);
-                ImGui::MenuItem("Circuit Editor", nullptr, &m_show_circuit_editor);
-                ImGui::MenuItem("Code Editor", nullptr, &m_show_code_editor);
-                ImGui::MenuItem("Serial Monitor", nullptr, &m_show_serial_monitor);
                 ImGui::EndMenu();
             }
 
             ImGui::EndMainMenuBar();
         }
 
-        // Panels
-        m_viewport.render(*m_renderer, *m_orchestrator);
-        m_timeline.render(*m_orchestrator);
+        // Main workspace window that fills the entire viewport (below menu bar)
+        ImVec2 viewport_size = ImGui::GetIO().DisplaySize;
+        float menu_height = 20.0f;
 
-        // Sync viewport selection to properties panel
-        m_properties.set_selected(m_orchestrator->get_selected_component());
+        ImGui::SetNextWindowPos(ImVec2(0, menu_height), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(viewport_size.x, viewport_size.y - menu_height), ImGuiCond_Always);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(2, 2));
+        ImGui::Begin("MainWorkspace", nullptr,
+                     ImGuiWindowFlags_NoTitleBar |
+                     ImGuiWindowFlags_NoResize |
+                     ImGuiWindowFlags_NoMove |
+                     ImGuiWindowFlags_NoCollapse |
+                     ImGuiWindowFlags_NoBringToFrontOnFocus);
 
-        m_properties.render(*m_orchestrator);
+        ImVec2 content_region = ImGui::GetContentRegionAvail();
+
+        // === TOP AREA (Left + Center + Right panels) ===
+        // Calculate top height based on bottom panel height (remaining space)
+        float splitter_height = 4.0f;
+        float top_height = content_region.y - m_bottom_panel_height - splitter_height;
+
+        // === LEFT PANEL (Scene Outliner) ===
+        ImGui::BeginChild("SceneOutlinerPanel",
+                          ImVec2(m_left_panel_width, top_height),
+                          true,
+                          ImGuiWindowFlags_None);
         render_component_tree();
+        ImGui::EndChild();
 
+        ImGui::SameLine();
+
+        // Splitter between left and center
+        ImGui::PushID(&m_left_panel_width);
+        if (render_splitter_v(&m_left_panel_width, 200.0f, 500.0f, top_height)) {
+            // Splitter changed
+        }
+        ImGui::PopID();
+
+        ImGui::SameLine();
+
+        // === CENTER PANEL (3D Viewport) ===
+        float center_width = content_region.x - m_left_panel_width - m_right_panel_width - 20;
+        ImGui::BeginChild("CenterViewport",
+                          ImVec2(center_width, top_height),
+                          true,
+                          ImGuiWindowFlags_None);
+        m_viewport.render(*m_renderer, *m_orchestrator);
+        ImGui::EndChild();
+
+        ImGui::SameLine();
+
+        // Splitter between center and right
+        ImGui::PushID(&m_right_panel_width);
+        if (render_splitter_v(&m_right_panel_width, 200.0f, 500.0f, top_height)) {
+            // Splitter changed
+        }
+        ImGui::PopID();
+
+        ImGui::SameLine();
+
+        // === RIGHT PANEL (Properties) ===
+        ImGui::BeginChild("PropertiesPanel",
+                          ImVec2(m_right_panel_width, top_height),
+                          true,
+                          ImGuiWindowFlags_None);
+        m_properties.set_selected(m_orchestrator->get_selected_component());
+        m_properties.render(*m_orchestrator);
+        ImGui::EndChild();
+
+        // Store splitter position for rendering later (after bottom panel)
+        ImVec2 splitter_pos = ImGui::GetCursorScreenPos();
+
+        // === BOTTOM PANELS (Tab bar - full width) ===
+        // Calculate bottom panel position - it should start right after the horizontal splitter
+        float bottom_y_start = top_height + splitter_height;
+        ImVec2 bottom_panel_pos(0.0f, bottom_y_start);
+        ImVec2 panel_size(content_region.x, m_bottom_panel_height);
+
+        // Manually position the cursor to where the bottom panel should start
+        ImGui::SetCursorPos(bottom_panel_pos);
+
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4, 4));
+        ImGui::BeginChild("BottomPanelArea", panel_size, false, ImGuiWindowFlags_None);
+        if (ImGui::BeginTabBar("BottomTabBar", ImGuiTabBarFlags_None)) {
+            if (ImGui::BeginTabItem("Timeline")) {
+                m_timeline.render(*m_orchestrator);
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("Serial Monitor")) {
+                m_serial_monitor.render(*m_orchestrator);
+                ImGui::EndTabItem();
+            }
+            ImGui::EndTabBar();
+        }
+        ImGui::EndChild();
+        ImGui::PopStyleVar();
+
+        // === HORIZONTAL SPLITTER (render AFTER bottom panel so it appears on top) ===
+        ImGui::SetCursorPos(ImVec2(0.0f, top_height));
+        ImGui::PushID(&m_bottom_panel_height);
+        if (render_splitter_h(&m_bottom_panel_height, 150.0f, content_region.y - 150.0f, content_region.x)) {
+            // Splitter changed
+        }
+        ImGui::PopID();
+
+        ImGui::End(); // MainWorkspace
+        ImGui::PopStyleVar(3);
+
+        // Demo window (optional)
         if (m_show_demo) {
             ImGui::ShowDemoWindow(&m_show_demo);
-        }
-
-        if (m_show_circuit_editor) {
-            m_circuit_editor.render(*m_orchestrator);
-        }
-
-        if (m_show_code_editor) {
-            m_code_editor.render(*m_orchestrator);
-        }
-
-        if (m_show_serial_monitor) {
-            m_serial_monitor.render(*m_orchestrator);
         }
 
         // Render
@@ -179,7 +268,7 @@ void UIApplication::run() {
 }
 
 void UIApplication::render_component_tree() {
-    ImGui::Begin("Scene");
+    // Scene panel content (no Begin/End - we're inside a tab)
 
     // Add Component Menu (dynamically populated from all loaded plugins)
     if (ImGui::Button("Add Component")) {
@@ -214,7 +303,8 @@ void UIApplication::render_component_tree() {
             {"thermal", "Multiphysics - Thermal"},
             {"magnetic", "Multiphysics - Magnetic"},
             {"mechanical", "Mechanics"},
-            {"rendering", "Rendering"}
+            {"rendering", "Rendering"},
+            {"instrument", "Instruments"}
         };
 
         // Counters for unique IDs
@@ -279,7 +369,84 @@ void UIApplication::render_component_tree() {
     }
 
     ImGui::EndChild();
-    ImGui::End();
+}
+
+bool UIApplication::render_splitter_v(float* size, float min_size, float max_size, float height) {
+    // InvisibleButton is better for splitters - it doesn't affect layout
+    ImVec2 cursor_pos = ImGui::GetCursorScreenPos();
+    ImVec2 avail = ImGui::GetContentRegionAvail();
+
+    float button_width = 4.0f;
+    float button_height = height > 0.0f ? height : avail.y;
+
+    ImGui::SetCursorScreenPos(ImVec2(cursor_pos.x, cursor_pos.y));
+    ImGui::InvisibleButton("##SplitterV", ImVec2(button_width, button_height));
+
+    bool hovered = ImGui::IsItemHovered();
+    bool active = ImGui::IsItemActive();
+
+    // Draw visible splitter line
+    ImDrawList* draw_list = ImGui::GetWindowDrawList();
+    ImU32 split_color = ImGui::GetColorU32(hovered ? ImGuiCol_SeparatorHovered : ImGuiCol_Separator);
+    draw_list->AddLine(
+        ImVec2(cursor_pos.x + 2.0f, cursor_pos.y),
+        ImVec2(cursor_pos.x + 2.0f, cursor_pos.y + button_height),
+        split_color,
+        2.0f
+    );
+
+    ImGui::SetCursorScreenPos(ImVec2(cursor_pos.x, cursor_pos.y + button_height));
+
+    if (active) {
+        float delta = ImGui::GetIO().MouseDelta.x;
+        // For right panel, dragging right should increase size (invert delta)
+        if (size == &m_right_panel_width) {
+            delta = -delta;
+        }
+        *size += delta;
+        if (*size < min_size) *size = min_size;
+        if (*size > max_size) *size = max_size;
+    }
+
+    if (hovered || active) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+    }
+
+    return active;
+}
+
+bool UIApplication::render_splitter_h(float* size, float min_size, float max_size, float width) {
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.4f, 0.4f, 0.4f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
+
+    float button_height = 4.0f;
+    float button_width = width > 0.0f ? width : ImGui::GetContentRegionAvail().x;
+
+    // Regular Button for automatic layout
+    ImGui::Button("##SplitterH", ImVec2(button_width, button_height));
+
+    bool hovered = ImGui::IsItemHovered();
+    bool active = ImGui::IsItemActive();
+
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor(3);
+
+    if (active) {
+        float delta = ImGui::GetIO().MouseDelta.y;
+        // For bottom panel height: dragging up (negative) should increase, dragging down (positive) should decrease
+        delta = -delta;
+        *size += delta;
+        if (*size < min_size) *size = min_size;
+        if (*size > max_size) *size = max_size;
+    }
+
+    if (hovered || active) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+    }
+
+    return active;
 }
 
 } // namespace mechatron

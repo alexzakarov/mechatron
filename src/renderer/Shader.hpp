@@ -20,6 +20,7 @@ public:
     void set_uniform(const std::string& name, float value);
     void set_uniform(const std::string& name, int value);
     void set_uniform(const std::string& name, const glm::vec3& value);
+    void set_uniform(const std::string& name, const glm::vec4& value);
     void set_uniform(const std::string& name, const glm::mat4& value);
 
     uint32_t program_id() const { return m_program; }

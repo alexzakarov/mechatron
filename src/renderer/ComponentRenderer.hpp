@@ -4,7 +4,11 @@
 #include "Mesh.hpp"
 #include "Camera.hpp"
 #include "core/Component.hpp"
+#include "cad/CADKernel.hpp"
+#include "cad/ModelAssetLibrary.hpp"
+#include "cad/ModifierEngine.hpp"
 #include <GL/glew.h>
+#include <cstdint>
 #include <memory>
 #include <unordered_map>
 
@@ -150,15 +154,55 @@ private:
 
     // Generic fallback
     void render_generic_component(const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected);
+    bool render_custom_model_if_mapped(const Component& comp, const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected);
 
     // Helper to create model matrix with position, rotation, and scale
     glm::mat4 create_model_matrix(const Vec3& pos, const Vec3& scale, const Vec3& rotation) const;
     glm::mat4 create_model_matrix_quat(const Vec3& pos, const Vec3& scale, const Quat& rotation) const;
 
+    // Set all lighting uniforms at once
+    void set_lighting_uniforms();
+
+    // Lighting configuration
+    struct LightingSettings {
+        float ambient_strength = 0.6f;
+        float diffuse1_strength = 0.4f;
+        float diffuse2_strength = 0.2f;
+        float diffuse3_strength = 0.2f;
+        float specular_strength = 0.3f;
+        float specular_power = 16.0f;
+    };
+
+    static LightingSettings& lighting_settings() {
+        static LightingSettings def;
+        return def;
+    }
+    void set_lighting_settings(const LightingSettings& settings) { lighting_settings() = settings; }
+
+    // Mesh resolution configuration
+    struct MeshResolution {
+        int cylinder_segments = 32;
+        int sphere_segments = 16;
+        int sphere_rings = 16;
+    };
+
+    static MeshResolution& mesh_resolution() {
+        static MeshResolution def;
+        return def;
+    }
+    void set_mesh_resolution(const MeshResolution& resolution) { mesh_resolution() = resolution; }
+
     Shader m_shader;
     Mesh m_box_mesh;
     Mesh m_cylinder_mesh;
     Mesh m_sphere_mesh;
+
+    // Custom model assets (optional)
+    CADKernel m_cad;
+    ModelAssetLibrary m_models;
+    ModifierEngine m_mod_engine;
+    std::unordered_map<std::string, Mesh> m_model_cache; // component_type -> mesh
+    uint64_t m_model_mapping_revision = 0;
 
     Registry* m_registry = nullptr;
     std::string m_selected_id;

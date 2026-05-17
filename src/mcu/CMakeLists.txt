@@ -5,6 +5,10 @@ add_library(mechatron_mcu STATIC
     FirmwareLoader.hpp
     ATmegaInterpreter.cpp
     ATmegaInterpreter.hpp
+    PhysicalMCUProtocol.cpp
+    PhysicalMCUProtocol.hpp
+    PhysicalMCUBridge.cpp
+    PhysicalMCUBridge.hpp
 )
 
 target_include_directories(mechatron_mcu
@@ -15,6 +19,7 @@ target_include_directories(mechatron_mcu
 target_link_libraries(mechatron_mcu
     PUBLIC
         mechatron_core
+        mechatron_io
         spdlog::spdlog
 )
 

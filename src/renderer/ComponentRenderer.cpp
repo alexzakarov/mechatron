@@ -9,6 +9,41 @@
 
 namespace mechatron {
 
+static Mesh mesh_from_meshdata(const MeshData& md) {
+    Mesh mesh;
+    if (md.vertices.empty() || md.triangles.empty()) {
+        return mesh;
+    }
+
+    mesh.vertices.reserve(md.triangles.size() * 3);
+    mesh.indices.reserve(md.triangles.size() * 3);
+
+    auto vtx = [&](uint32_t idx) -> Vertex {
+        Vec3 p = md.vertices[idx];
+        Vec3 n = (idx < md.normals.size()) ? md.normals[idx] : Vec3{0, 1, 0};
+        return Vertex{p, n};
+    };
+
+    uint32_t base = 0;
+    for (const auto& tri : md.triangles) {
+        if (tri.v0 >= md.vertices.size() || tri.v1 >= md.vertices.size() || tri.v2 >= md.vertices.size()) {
+            continue;
+        }
+        mesh.vertices.push_back(vtx(tri.v0));
+        mesh.vertices.push_back(vtx(tri.v1));
+        mesh.vertices.push_back(vtx(tri.v2));
+        mesh.indices.push_back(base);
+        mesh.indices.push_back(base + 1);
+        mesh.indices.push_back(base + 2);
+        base += 3;
+    }
+
+    if (!mesh.vertices.empty() && !mesh.indices.empty()) {
+        mesh.upload();
+    }
+    return mesh;
+}
+
 static const char* component_vertex_shader = R"(
 #version 330 core
 layout (location = 0) in vec3 aPos;
@@ -38,10 +73,17 @@ uniform vec3 uColor;
 uniform vec3 uViewPos;
 uniform bool uSelected;
 
+// Lighting uniforms - configurable
+uniform float uAmbientStrength;
+uniform float uDiffuse1Strength;
+uniform float uDiffuse2Strength;
+uniform float uDiffuse3Strength;
+uniform float uSpecularStrength;
+uniform float uSpecularPower;
+
 void main() {
-    // Higher ambient for better base visibility
-    float ambientStrength = 0.6f;
-    vec3 ambient = ambientStrength * uColor;
+    // Use configurable ambient strength
+    vec3 ambient = uAmbientStrength * uColor;
 
     // Normalize the normal vector
     vec3 norm = normalize(Normal);
@@ -49,24 +91,23 @@ void main() {
     // Top directional light (from above)
     vec3 lightDir1 = normalize(vec3(0.0, 1.0, 0.0));
     float diff1 = max(dot(norm, lightDir1), 0.0);
-    vec3 diffuse1 = 0.4 * diff1 * uColor;
+    vec3 diffuse1 = uDiffuse1Strength * diff1 * uColor;
 
     // Bottom directional light (fill light from below)
     vec3 lightDir2 = normalize(vec3(0.0, -1.0, 0.0));
     float diff2 = max(dot(norm, lightDir2), 0.0);
-    vec3 diffuse2 = 0.2 * diff2 * uColor;
+    vec3 diffuse2 = uDiffuse2Strength * diff2 * uColor;
 
     // Side lights for depth
     vec3 lightDir3 = normalize(vec3(1.0, 0.5, 1.0));
     float diff3 = max(dot(norm, lightDir3), 0.0);
-    vec3 diffuse3 = 0.2 * diff3 * uColor;
+    vec3 diffuse3 = uDiffuse3Strength * diff3 * uColor;
 
-    // Specular (subtle)
-    float specularStrength = 0.3f;
+    // Specular (configurable)
     vec3 viewDir = normalize(uViewPos - FragPos);
     vec3 reflectDir = reflect(-lightDir1, norm);
-    float spec = pow(max(dot(viewDir, reflectDir), 0.0), 16);
-    vec3 specular = specularStrength * spec * vec3(1.0);
+    float spec = pow(max(dot(viewDir, reflectDir), 0.0), uSpecularPower);
+    vec3 specular = uSpecularStrength * spec * vec3(1.0);
 
     // Combine all lighting
     vec3 result = ambient + diffuse1 + diffuse2 + diffuse3 + specular;
@@ -94,8 +135,12 @@ bool ComponentRenderer::init() {
 
     // Create primitive meshes
     m_box_mesh = Mesh::create_box(1.0f, 1.0f, 1.0f);
-    m_cylinder_mesh = Mesh::create_cylinder(0.5f, 1.0f, 32);
-    m_sphere_mesh = Mesh::create_sphere(0.5f, 16, 16);
+    m_cylinder_mesh = Mesh::create_cylinder(0.5f, 1.0f, mesh_resolution().cylinder_segments);
+    m_sphere_mesh = Mesh::create_sphere(0.5f, mesh_resolution().sphere_segments, mesh_resolution().sphere_rings);
+
+    // Load model mapping (optional)
+    m_models.load_mapping();
+    m_model_mapping_revision = m_models.mapping_revision();
 
     spdlog::info("ComponentRenderer initialized");
     return true;
@@ -103,6 +148,66 @@ bool ComponentRenderer::init() {
 
 void ComponentRenderer::shutdown() {
     // Meshes cleaned up automatically
+}
+
+bool ComponentRenderer::render_custom_model_if_mapped(const Component& comp, const Vec3& pos, const Vec3& scale, const Quat& rotation, bool selected) {
+    const std::string ctype(comp.component_type());
+    ModelAssetLibrary::MappingEntry mapped{};
+    if (!m_models.resolve_effective_asset_for_component(ctype, mapped)) {
+        return false;
+    }
+
+    const uint64_t revision = m_models.asset_revision(mapped.asset_id, mapped.scope);
+    const std::string cache_prefix = ctype + "|" + mapped.scope + ":" + mapped.asset_id + "#";
+    const std::string cache_key = cache_prefix + std::to_string(revision);
+    auto it = m_model_cache.find(cache_key);
+    if (it == m_model_cache.end()) {
+        for (auto stale = m_model_cache.begin(); stale != m_model_cache.end();) {
+            if (stale->first.starts_with(cache_prefix)) {
+                stale = m_model_cache.erase(stale);
+            } else {
+                ++stale;
+            }
+        }
+
+        MeshData base;
+        std::string err;
+        if (!m_models.load_asset_mesh(m_cad, mapped.asset_id, mapped.scope, base, &err)) {
+            spdlog::warn("Custom model mapping exists for '{}' but base mesh load failed: {}", ctype, err);
+            return false;
+        }
+        ModelAssetMeta meta;
+        m_models.load_asset_meta(mapped.asset_id, mapped.scope, meta, nullptr);
+
+        MeshData final_mesh = base;
+        if (!meta.modifiers.modifiers.empty()) {
+            auto loader = [&](const std::string& aid, const std::string& scope, MeshData& out) -> bool {
+                return m_models.load_asset_mesh(m_cad, aid, scope, out, nullptr);
+            };
+            MeshData modded;
+            if (!m_mod_engine.apply(m_cad, base, meta.modifiers, loader, modded, &err)) {
+                spdlog::warn("Modifier apply failed for asset '{}': {}", mapped.asset_id, err);
+            } else {
+                final_mesh = std::move(modded);
+            }
+        }
+
+        Mesh m = mesh_from_meshdata(final_mesh);
+        if (!m.vao) {
+            spdlog::warn("Custom model mapping exists for '{}' but final mesh is empty or invalid", ctype);
+            return false;
+        }
+        it = m_model_cache.emplace(cache_key, std::move(m)).first;
+    }
+
+    glm::mat4 model = create_model_matrix_quat(pos, scale, rotation);
+    m_shader.set_uniform("uModel", model);
+    Vec3 color = selected ? m_color_selected : m_color_generic;
+    m_shader.set_uniform("uColor", glm::vec3(color.x, color.y, color.z));
+    m_shader.set_uniform("uSelected", selected ? 1 : 0);
+
+    it->second.draw();
+    return true;
 }
 
 glm::mat4 ComponentRenderer::create_model_matrix(const Vec3& pos, const Vec3& scale, const Vec3& rotation) const {
@@ -147,12 +252,26 @@ glm::mat4 ComponentRenderer::create_model_matrix_quat(const Vec3& pos, const Vec
     return model;
 }
 
+void ComponentRenderer::set_lighting_uniforms() {
+    m_shader.set_uniform("uAmbientStrength", lighting_settings().ambient_strength);
+    m_shader.set_uniform("uDiffuse1Strength", lighting_settings().diffuse1_strength);
+    m_shader.set_uniform("uDiffuse2Strength", lighting_settings().diffuse2_strength);
+    m_shader.set_uniform("uDiffuse3Strength", lighting_settings().diffuse3_strength);
+    m_shader.set_uniform("uSpecularStrength", lighting_settings().specular_strength);
+    m_shader.set_uniform("uSpecularPower", lighting_settings().specular_power);
+}
+
 void ComponentRenderer::render_component(const Component& comp, const Camera& camera, float aspect) {
     const auto& t = comp.transform();
     bool selected = (comp.id() == m_selected_id);
 
     // Use quaternion rotation directly - no conversion to Euler needed
     const Quat& rotation = t.rotation;
+
+    // Custom model override (component_type -> model asset).
+    if (render_custom_model_if_mapped(comp, t.position, t.scale, rotation, selected)) {
+        return;
+    }
 
     // Route to appropriate renderer based on component type
     std::string_view type = comp.component_type();
@@ -338,10 +457,20 @@ void ComponentRenderer::render_component(const Component& comp, const Camera& ca
 void ComponentRenderer::render_all(const Camera& camera, float aspect) {
     if (!m_registry) return;
 
+    const uint64_t mapping_revision = m_models.mapping_revision();
+    if (mapping_revision != m_model_mapping_revision) {
+        m_models.load_mapping();
+        m_model_mapping_revision = mapping_revision;
+        m_model_cache.clear();
+    }
+
     m_shader.bind();
     m_shader.set_uniform("uView", camera.view_matrix());
     m_shader.set_uniform("uProj", camera.projection_matrix(aspect));
     m_shader.set_uniform("uViewPos", glm::vec3(camera.position().x, camera.position().y, camera.position().z));
+
+    // Set configurable lighting uniforms
+    set_lighting_uniforms();
 
     m_registry->for_each([this, &camera, aspect](Component& comp) {
         render_component(comp, camera, aspect);

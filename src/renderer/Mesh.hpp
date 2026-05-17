@@ -20,8 +20,17 @@ struct Mesh {
     uint32_t vbo = 0;
     uint32_t ebo = 0;
 
+    Mesh() = default;
+    ~Mesh();
+    Mesh(const Mesh&) = delete;
+    Mesh& operator=(const Mesh&) = delete;
+    Mesh(Mesh&& other) noexcept;
+    Mesh& operator=(Mesh&& other) noexcept;
+
     void upload();
     void draw() const;
+    void draw_lines() const;
+    void draw_points(float point_size = 1.0f) const;
     void cleanup();
 
     static Mesh create_box(float w, float h, float d);

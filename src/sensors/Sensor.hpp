@@ -18,6 +18,13 @@ public:
     // Read current sensor value
     virtual float read() const = 0;
 
+    // Sensor voltage range configuration
+    static float& default_max_voltage() {
+        static float def = 5.0f;  // Default 0-5V range
+        return def;
+    }
+    static void set_default_max_voltage(float volts) { default_max_voltage() = volts; }
+
     // Sensor-specific parameters
     void set_min_value(float min) { m_min_value = min; }
     void set_max_value(float max) { m_max_value = max; }
@@ -28,7 +35,7 @@ public:
 
 protected:
     float m_min_value = 0.0f;
-    float m_max_value = 5.0f;   // Default 0-5V range
+    float m_max_value = default_max_voltage();   // Default 0-5V range
     float m_noise_level = 0.0f; // Add noise to readings
 };
 
@@ -140,6 +147,13 @@ public:
     int get_pulse_count() const { return m_pulse_count; }
     void reset_count() { m_pulse_count = 0; m_angle = 0.0f; }
 
+    // Encoder resolution presets
+    static int& default_resolution() {
+        static int def = 360;  // Default 360 PPR (1 degree per pulse)
+        return def;
+    }
+    static void set_default_resolution(int ppr) { default_resolution() = ppr; }
+
     // For coupling with DC motor
     void set_angular_velocity(float rad_s) { m_angular_velocity = rad_s; }
     float get_angular_velocity() const { return m_angular_velocity; }
@@ -152,7 +166,7 @@ public:
 private:
     float m_angle = 0.0f;
     int m_pulse_count = 0;
-    int m_resolution = 360;     // Default 360 PPR (1 degree per pulse)
+    int m_resolution = default_resolution();     // Default 360 PPR
     float m_angular_velocity = 0.0f; // rad/s - for coupling with motor
 };
 

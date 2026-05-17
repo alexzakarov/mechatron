@@ -7,14 +7,11 @@
 
 namespace mechatron {
 
-// ATmega328P flash size: 32KB = 16K words
-constexpr uint16_t FLASH_SIZE_WORDS = 16 * 1024;
-constexpr uint32_t F_CPU = 16000000;  // 16 MHz
-
 ATmegaInterpreter::ATmegaInterpreter(QEMUInterface& mcu)
     : m_mcu(mcu)
 {
-    m_flash.resize(FLASH_SIZE_WORDS, 0xFFFF);
+    const auto& v = m_mcu.mcu_variant();
+    m_flash.resize(v.flash_size_words, 0xFFFF);
     build_instruction_table();
 }
 
@@ -64,15 +61,15 @@ void ATmegaInterpreter::build_instruction_table() {
     m_instruction_table[0x9508] = &ATmegaInterpreter::exec_RET;
     m_instruction_table[0x9518] = &ATmegaInterpreter::exec_RETI;
     m_instruction_table[0x95C8] = &ATmegaInterpreter::exec_LPM;
-
-    // STS: 1001 001d dddd 0000
-    for (uint16_t op = 0x9200; op <= 0x9300; op += 0x100) {
-        m_instruction_table[op] = &ATmegaInterpreter::exec_STS;
+    for (uint16_t d = 0; d < 32; d++) {
+        m_instruction_table[0x9004 | (d << 4)] = &ATmegaInterpreter::exec_LPM;  // LPM Rd,Z
+        m_instruction_table[0x9005 | (d << 4)] = &ATmegaInterpreter::exec_LPM;  // LPM Rd,Z+
     }
 
-    // LDS: 1001 000d dddd 0000
-    for (uint16_t op = 0x9000; op <= 0x9100; op += 0x100) {
-        m_instruction_table[op] = &ATmegaInterpreter::exec_LDS;
+    // STS/LDS: 1001 00xd dddd 0000 (2-word direct data memory access)
+    for (uint16_t d = 0; d < 32; d++) {
+        m_instruction_table[0x9200 | (d << 4)] = &ATmegaInterpreter::exec_STS;
+        m_instruction_table[0x9000 | (d << 4)] = &ATmegaInterpreter::exec_LDS;
     }
 
     // ADD: 0000 11rd dddd rrrr
@@ -155,24 +152,17 @@ void ATmegaInterpreter::build_instruction_table() {
         m_instruction_table[op] = &ATmegaInterpreter::exec_CP;
     }
 
+    // CPSE: 0001 00rd dddd rrrr
+    for (uint16_t op = 0x1000; op <= 0x13FF; op++) {
+        m_instruction_table[op] = &ATmegaInterpreter::exec_CPSE;
+    }
+
     // CPC: 0000 01rd dddd rrrr
     for (uint16_t op = 0x0400; op <= 0x07FF; op++) {
         m_instruction_table[op] = &ATmegaInterpreter::exec_CPC;
     }
 
-    // Branch instructions - use fixed iteration count to avoid overflow
-    for (int i = 0; i < 7; i++) {
-        m_instruction_table[0xF001 + (i * 0x200)] = &ATmegaInterpreter::exec_BREQ;
-    }
-    for (int i = 0; i < 6; i++) {
-        m_instruction_table[0xF401 + (i * 0x200)] = &ATmegaInterpreter::exec_BRNE;
-    }
-    for (int i = 0; i < 6; i++) {
-        m_instruction_table[0xF400 + (i * 0x200)] = &ATmegaInterpreter::exec_BRSH;
-    }
-    for (int i = 0; i < 7; i++) {
-        m_instruction_table[0xF000 + (i * 0x200)] = &ATmegaInterpreter::exec_BRLO;
-    }
+    // Branch instructions are fully populated below as BRBS/BRBC aliases.
     for (int i = 0; i < 6; i++) {
         m_instruction_table[0xF402 + (i * 0x200)] = &ATmegaInterpreter::exec_BRMI;
     }
@@ -204,28 +194,32 @@ void ATmegaInterpreter::build_instruction_table() {
     m_instruction_table[0x940D] = &ATmegaInterpreter::exec_JMP;
     m_instruction_table[0x950D] = &ATmegaInterpreter::exec_JMP;
 
-    // IJMP: 1001 0100 0000 1110 (0x940E) - Indirect Jump to Z
-    // ICALL: 1001 0100 0000 1111 (0x940F) - Indirect Call to Z
-    m_instruction_table[0x940E] = &ATmegaInterpreter::exec_IJMP;
-    m_instruction_table[0x940F] = &ATmegaInterpreter::exec_ICALL;
-    m_instruction_table[0x950E] = &ATmegaInterpreter::exec_EIJMP;
-    m_instruction_table[0x950F] = &ATmegaInterpreter::exec_EICALL;
+    // CALL: 1001 010k kkkk 111k (2-word instruction).
+    // avr-gcc commonly emits 0x940E/0x940F for absolute calls.
+    m_instruction_table[0x940E] = &ATmegaInterpreter::exec_CALL;
+    m_instruction_table[0x940F] = &ATmegaInterpreter::exec_CALL;
+    m_instruction_table[0x950E] = &ATmegaInterpreter::exec_CALL;
+    m_instruction_table[0x950F] = &ATmegaInterpreter::exec_CALL;
+
+    // Indirect jump/call opcodes are single-word and distinct from CALL.
+    m_instruction_table[0x9409] = &ATmegaInterpreter::exec_IJMP;
+    m_instruction_table[0x9419] = &ATmegaInterpreter::exec_EIJMP;
+    m_instruction_table[0x9509] = &ATmegaInterpreter::exec_ICALL;
+    m_instruction_table[0x9519] = &ATmegaInterpreter::exec_EICALL;
 
     // Debug: verify JMP is set correctly
-    spdlog::info("Instruction table[0x940C] set");
+    spdlog::trace("Instruction table[0x940C] set");
 
     // Debug log before ADDITIONAL INSTRUCTIONS
-    spdlog::info("Building additional instructions...");
+    spdlog::trace("Building additional instructions...");
 
-    // Single instructions
-    m_instruction_table[0x9403] = &ATmegaInterpreter::exec_INC;
-    m_instruction_table[0x9503] = &ATmegaInterpreter::exec_INC;
-    m_instruction_table[0x940A] = &ATmegaInterpreter::exec_DEC;
-    m_instruction_table[0x950A] = &ATmegaInterpreter::exec_DEC;
-    m_instruction_table[0x9400] = &ATmegaInterpreter::exec_COM;
-    m_instruction_table[0x9500] = &ATmegaInterpreter::exec_COM;
-    m_instruction_table[0x9401] = &ATmegaInterpreter::exec_NEG;
-    m_instruction_table[0x9501] = &ATmegaInterpreter::exec_NEG;
+    // Single-register ALU instructions: 1001 010d dddd xxxx
+    for (uint16_t d = 0; d < 32; d++) {
+        m_instruction_table[0x9403 | (d << 4)] = &ATmegaInterpreter::exec_INC;
+        m_instruction_table[0x940A | (d << 4)] = &ATmegaInterpreter::exec_DEC;
+        m_instruction_table[0x9400 | (d << 4)] = &ATmegaInterpreter::exec_COM;
+        m_instruction_table[0x9401 | (d << 4)] = &ATmegaInterpreter::exec_NEG;
+    }
     m_instruction_table[0x920F] = &ATmegaInterpreter::exec_PUSH;
     m_instruction_table[0x930F] = &ATmegaInterpreter::exec_PUSH;
     m_instruction_table[0x900F] = &ATmegaInterpreter::exec_POP;
@@ -237,18 +231,18 @@ void ATmegaInterpreter::build_instruction_table() {
     // ========================================
 
     // MUL: 1001 11rd dddd rrrr - Multiply (r25:r24 = Rd * Rr)
-    spdlog::info("Building MUL instructions...");
+    spdlog::trace("Building MUL instructions...");
     for (uint16_t op = 0x9C00; op <= 0x9FFF; op++) {
         m_instruction_table[op] = &ATmegaInterpreter::exec_MUL;
     }
-    spdlog::info("MUL instructions done");
+    spdlog::trace("MUL instructions done");
 
     // MULS: 0000 0010 dddd rrrr - Multiply Signed (r25:r24 = Rd * Rr)
-    spdlog::info("Building MULS instructions...");
+    spdlog::trace("Building MULS instructions...");
     for (uint16_t op = 0x0200; op <= 0x02FF; op++) {
         m_instruction_table[op] = &ATmegaInterpreter::exec_MULS;
     }
-    spdlog::info("MULS instructions done");
+    spdlog::trace("MULS instructions done");
 
     // MULSU: 0000 0011 0ddd 0rrr - Multiply Signed with Unsigned
     for (uint16_t d = 16; d <= 23; d++) {
@@ -282,9 +276,9 @@ void ATmegaInterpreter::build_instruction_table() {
         }
     }
 
-    // DES: 1001 0100 KKKK 1010 - DES (Data Encryption Step)
+    // DES: 1001 0100 KKKK 1011 - DES (Data Encryption Step)
     for (uint16_t k = 0; k < 16; k++) {
-        m_instruction_table[0x940A | (k << 4)] = &ATmegaInterpreter::exec_NOP_other; // DES - optional, treat as NOP
+        m_instruction_table[0x940B | (k << 4)] = &ATmegaInterpreter::exec_NOP_other; // DES - optional, treat as NOP
     }
 
     // BREAK: 1001 0101 1001 1000
@@ -316,133 +310,12 @@ void ATmegaInterpreter::build_instruction_table() {
     // BRANCH INSTRUCTIONS (Complete)
     // ========================================
 
-    // BREQ: 1111 00kk kkkk k000 (skip if equal/Z=1)
-    spdlog::info("Building BREQ instructions...");
-    for (int i = 0; i < 8; i++) {
-        for (uint16_t k = 0; k < 128; k++) {
-            m_instruction_table[0xF000 | (i << 10) | (k << 3) | 0x000] = &ATmegaInterpreter::exec_BREQ;
-        }
-    }
-    spdlog::info("BREQ instructions done");
-
-    // BRNE: 1111 01kk kkkk k001 (skip if not equal/Z=0)
-    spdlog::info("Building BRNE instructions...");
-    for (int i = 0; i < 8; i++) {
-        for (uint16_t k = 0; k < 128; k++) {
-            m_instruction_table[0xF400 | (i << 10) | (k << 3) | 0x001] = &ATmegaInterpreter::exec_BRNE;
-        }
-    }
-    spdlog::info("BRNE instructions done");
-
-    // BRCS: 1111 01kk kkkk k000 (skip if carry set)
-    for (int i = 0; i < 8; i++) {
-        for (uint16_t k = 0; k < 128; k++) {
-            m_instruction_table[0xF000 | (i << 10) | (k << 3) | 0x000] = &ATmegaInterpreter::exec_BRCS;
-        }
-    }
-
-    // BRCC: 1111 01kk kkkk k010 (skip if carry clear, same as BRSH)
-    for (int i = 0; i < 8; i++) {
-        for (uint16_t k = 0; k < 128; k++) {
-            m_instruction_table[0xF400 | (i << 10) | (k << 3) | 0x002] = &ATmegaInterpreter::exec_BRCC;
-        }
-    }
-
-    // BRSH: 1111 01kk kkkk k010 (skip if same or higher/C=0)
-    for (int i = 0; i < 8; i++) {
-        for (uint16_t k = 0; k < 128; k++) {
-            m_instruction_table[0xF400 | (i << 10) | (k << 3) | 0x002] = &ATmegaInterpreter::exec_BRSH;
-        }
-    }
-
-    // BRLO: 1111 00kk kkkk k010 (skip if lower/C=1)
-    for (int i = 0; i < 8; i++) {
-        for (uint16_t k = 0; k < 128; k++) {
-            m_instruction_table[0xF000 | (i << 10) | (k << 3) | 0x002] = &ATmegaInterpreter::exec_BRLO;
-        }
-    }
-
-    // BRMI: 1111 01kk kkkk k010 (skip if minus/N=1)
-    for (int i = 0; i < 8; i++) {
-        for (uint16_t k = 0; k < 128; k++) {
-            m_instruction_table[0xF400 | (i << 10) | (k << 3) | 0x002] = &ATmegaInterpreter::exec_BRMI;
-        }
-    }
-
-    // BRPL: 1111 01kk kkkk k011 (skip if plus/N=0)
-    for (int i = 0; i < 8; i++) {
-        for (uint16_t k = 0; k < 128; k++) {
-            m_instruction_table[0xF400 | (i << 10) | (k << 3) | 0x003] = &ATmegaInterpreter::exec_BRPL;
-        }
-    }
-
-    // BRGE: 1111 01kk kkkk k100 (skip if greater or equal/S=0)
-    for (int i = 0; i < 8; i++) {
-        for (uint16_t k = 0; k < 128; k++) {
-            m_instruction_table[0xF400 | (i << 10) | (k << 3) | 0x004] = &ATmegaInterpreter::exec_BRGE;
-        }
-    }
-
-    // BRLT: 1111 01kk kkkk k100 (skip if less than/S=1)
-    for (int i = 0; i < 8; i++) {
-        for (uint16_t k = 0; k < 128; k++) {
-            m_instruction_table[0xF000 | (i << 10) | (k << 3) | 0x004] = &ATmegaInterpreter::exec_BRLT;
-        }
-    }
-
-    // BRHS: 1111 01kk kkkk k101 (skip if half carry set)
-    for (int i = 0; i < 8; i++) {
-        for (uint16_t k = 0; k < 128; k++) {
-            m_instruction_table[0xF400 | (i << 10) | (k << 3) | 0x005] = &ATmegaInterpreter::exec_BRHS;
-        }
-    }
-
-    // BRHC: 1111 01kk kkkk k101 (skip if half carry clear)
-    for (int i = 0; i < 8; i++) {
-        for (uint16_t k = 0; k < 128; k++) {
-            m_instruction_table[0xF000 | (i << 10) | (k << 3) | 0x005] = &ATmegaInterpreter::exec_BRHC;
-        }
-    }
-
-    // BRTS: 1111 01kk kkkk k110 (skip if T flag set)
-    for (int i = 0; i < 8; i++) {
-        for (uint16_t k = 0; k < 128; k++) {
-            m_instruction_table[0xF400 | (i << 10) | (k << 3) | 0x006] = &ATmegaInterpreter::exec_BRTS;
-        }
-    }
-
-    // BRTC: 1111 01kk kkkk k110 (skip if T flag clear)
-    for (int i = 0; i < 8; i++) {
-        for (uint16_t k = 0; k < 128; k++) {
-            m_instruction_table[0xF000 | (i << 10) | (k << 3) | 0x006] = &ATmegaInterpreter::exec_BRTC;
-        }
-    }
-
-    // BRVS: 1111 01kk kkkk k011 (skip if overflow set)
-    for (int i = 0; i < 8; i++) {
-        for (uint16_t k = 0; k < 128; k++) {
-            m_instruction_table[0xF400 | (i << 10) | (k << 3) | 0x003] = &ATmegaInterpreter::exec_BRVS;
-        }
-    }
-
-    // BRVC: 1111 01kk kkkk k011 (skip if overflow clear)
-    for (int i = 0; i < 8; i++) {
-        for (uint16_t k = 0; k < 128; k++) {
-            m_instruction_table[0xF000 | (i << 10) | (k << 3) | 0x007] = &ATmegaInterpreter::exec_BRVC;
-        }
-    }
-
-    // BRIE: 1111 01kk kkkk k111 (skip if interrupt enabled)
-    for (int i = 0; i < 8; i++) {
-        for (uint16_t k = 0; k < 128; k++) {
-            m_instruction_table[0xF400 | (i << 10) | (k << 3) | 0x007] = &ATmegaInterpreter::exec_BRIE;
-        }
-    }
-
-    // BRID: 1111 01kk kkkk k111 (skip if interrupt disabled)
-    for (int i = 0; i < 8; i++) {
-        for (uint16_t k = 0; k < 128; k++) {
-            m_instruction_table[0xF000 | (i << 10) | (k << 3) | 0x007] = &ATmegaInterpreter::exec_BRID;
+    // BRBS/BRBC: 1111 00kk kkkk ksss / 1111 01kk kkkk ksss.
+    // Aliases such as BREQ/BRNE/BRCS/BRCC differ only by SREG bit number.
+    for (uint16_t k = 0; k < 128; k++) {
+        for (uint16_t s = 0; s < 8; s++) {
+            m_instruction_table[0xF000 | (k << 3) | s] = &ATmegaInterpreter::exec_BRBS;
+            m_instruction_table[0xF400 | (k << 3) | s] = &ATmegaInterpreter::exec_BRBC;
         }
     }
 
@@ -451,217 +324,206 @@ void ATmegaInterpreter::build_instruction_table() {
     // ========================================
 
     // LD: 10q0 qq0d dddd qqqq (Load Indirect using X/Y/Z)
-    // LD X: 1001 000d dddd 1100 (0x900C), 1001 000d dddd 1101 (0x900D, X+), 1001 100d dddd 1100 (0x980C, -X)
-    // LD Y: 1000 100d dddd 1000 (0x8808), 1001 000d dddd 1001 (0x9009, Y+), 1001 100d dddd 1010 (0x980A, -Y)
-    // LD Z: 1000 000d dddd 0000 (0x8000), 1001 000d dddd 0001 (0x9001, Z+), 1001 100d dddd 1010 (0x980A, -Z)
-    // Actually let me use the correct patterns from the AVR instruction set
-
-    // LD X: 1001 000d dddd 1100 (0x900C to 0x91FC)
+    // LD X: 1001 000d dddd 1100, 1001 000d dddd 1101 (X+), 1001 000d dddd 1110 (-X)
     for (uint16_t d = 0; d < 32; d++) {
         m_instruction_table[0x9000 | (d << 4) | 0x000C] = &ATmegaInterpreter::exec_LD;
         m_instruction_table[0x9000 | (d << 4) | 0x000D] = &ATmegaInterpreter::exec_LD;  // LD X+
-        m_instruction_table[0x9800 | (d << 4) | 0x000C] = &ATmegaInterpreter::exec_LD;  // LD -X
+        m_instruction_table[0x9000 | (d << 4) | 0x000E] = &ATmegaInterpreter::exec_LD;  // LD -X
     }
 
-    // LD Y: 1000 100d dddd 1000 (0x8088 to 81F8), 1001 000d dddd 1001 (0x9009), 1001 100d dddd 1010 (0x980A)
-    spdlog::info("Building LD Y instructions...");
+    // LD Y: 1000 000d dddd 1000, 1001 000d dddd 1001 (Y+), 1001 000d dddd 1010 (-Y)
+    spdlog::trace("Building LD Y instructions...");
     for (uint16_t d = 0; d < 32; d++) {
-        m_instruction_table[0x8000 | (d << 5) | 0x0008] = &ATmegaInterpreter::exec_LD;   // LD Y
+        m_instruction_table[0x8000 | (d << 4) | 0x0008] = &ATmegaInterpreter::exec_LD;   // LD Y
         m_instruction_table[0x9000 | (d << 4) | 0x0009] = &ATmegaInterpreter::exec_LD;   // LD Y+
-        m_instruction_table[0x9800 | (d << 4) | 0x000A] = &ATmegaInterpreter::exec_LD;   // LD -Y
+        m_instruction_table[0x9000 | (d << 4) | 0x000A] = &ATmegaInterpreter::exec_LD;   // LD -Y
     }
-    spdlog::info("LD Y instructions done");
+    spdlog::trace("LD Y instructions done");
 
-    // LD Z: 1000 000d dddd 0000 (0x8000 to 81F0), 1001 000d dddd 0001 (0x9001), 1001 100d dddd 1010 (0x980A)
+    // LD Z: 1000 000d dddd 0000, 1001 000d dddd 0001 (Z+), 1001 000d dddd 0010 (-Z)
     for (uint16_t d = 0; d < 32; d++) {
-        m_instruction_table[0x8000 | (d << 3) | 0x0000] = &ATmegaInterpreter::exec_LD;   // LD Z
+        m_instruction_table[0x8000 | (d << 4) | 0x0000] = &ATmegaInterpreter::exec_LD;   // LD Z
         m_instruction_table[0x9000 | (d << 4) | 0x0001] = &ATmegaInterpreter::exec_LD;   // LD Z+
-        m_instruction_table[0x9800 | (d << 4) | 0x000A] = &ATmegaInterpreter::exec_LD;   // LD -Z
+        m_instruction_table[0x9000 | (d << 4) | 0x0002] = &ATmegaInterpreter::exec_LD;   // LD -Z
     }
 
     // ST: 10q0 qq0d dddd qqqq (Store Indirect using X/Y/Z)
-    // ST X: 1001 001d dddd 1100 (0x920C), 1001 001d dddd 1101 (0x920D, X+), 1001 101d dddd 1100 (0x9A0C, -X)
+    // ST X: 1001 001d dddd 1100, 1001 001d dddd 1101 (X+), 1001 001d dddd 1110 (-X)
     for (uint16_t d = 0; d < 32; d++) {
         m_instruction_table[0x9200 | (d << 4) | 0x000C] = &ATmegaInterpreter::exec_ST;
         m_instruction_table[0x9200 | (d << 4) | 0x000D] = &ATmegaInterpreter::exec_ST;   // ST X+
-        m_instruction_table[0x9A00 | (d << 4) | 0x000C] = &ATmegaInterpreter::exec_ST;   // ST -X
+        m_instruction_table[0x9200 | (d << 4) | 0x000E] = &ATmegaInterpreter::exec_ST;   // ST -X
     }
 
-    // ST Y: 1000 101d dddd 1000 (0x82C8), 1001 001d dddd 1001 (0x9209), 1001 101d dddd 1010 (0x9A0A)
+    // ST Y: 1000 001d dddd 1000, 1001 001d dddd 1001 (Y+), 1001 001d dddd 1010 (-Y)
     for (uint16_t d = 0; d < 32; d++) {
-        m_instruction_table[0x8200 | (d << 5) | 0x0008] = &ATmegaInterpreter::exec_ST;   // ST Y
+        m_instruction_table[0x8200 | (d << 4) | 0x0008] = &ATmegaInterpreter::exec_ST;   // ST Y
         m_instruction_table[0x9200 | (d << 4) | 0x0009] = &ATmegaInterpreter::exec_ST;   // ST Y+
-        m_instruction_table[0x9A00 | (d << 4) | 0x000A] = &ATmegaInterpreter::exec_ST;   // ST -Y
+        m_instruction_table[0x9200 | (d << 4) | 0x000A] = &ATmegaInterpreter::exec_ST;   // ST -Y
     }
 
-    // ST Z: 1000 001d dddd 0000 (0x8200), 1001 001d dddd 0001 (0x9201), 1001 101d dddd 1010 (0x9A0A)
+    // ST Z: 1000 001d dddd 0000, 1001 001d dddd 0001 (Z+), 1001 001d dddd 0010 (-Z)
     for (uint16_t d = 0; d < 32; d++) {
-        m_instruction_table[0x8200 | (d << 3) | 0x0000] = &ATmegaInterpreter::exec_ST;   // ST Z
+        m_instruction_table[0x8200 | (d << 4) | 0x0000] = &ATmegaInterpreter::exec_ST;   // ST Z
         m_instruction_table[0x9200 | (d << 4) | 0x0001] = &ATmegaInterpreter::exec_ST;   // ST Z+
-        m_instruction_table[0x9A00 | (d << 4) | 0x000A] = &ATmegaInterpreter::exec_ST;   // ST -Z
+        m_instruction_table[0x9200 | (d << 4) | 0x0002] = &ATmegaInterpreter::exec_ST;   // ST -Z
     }
-
-    // LDD Y+q: 10q0 qq1d dddd 1qqq
-    spdlog::info("Building LDD Y+q part 1...");
-    for (uint16_t q = 0; q < 32; q++) {
-        for (uint16_t d = 0; d < 32; d++) {
-            uint16_t op = 0x8000 | ((q & 0x20) << 8) | ((q & 0x18) << 7) | ((q & 0x07) << 4) | 0x0008 | (d << 5);
-            // This is complex, let's simplify
-            // LDD Y+q: 1000 000d dddd 1qqq for q=0-7, 1000 001d dddd 0qqq for q=8-15, etc.
-        }
-    }
-    spdlog::info("LDD Y+q part 1 done");
 
     // LDD Y+q: 10q0 qq0d dddd 1qqq where q is 0-63
-    // This gives us: 10q0 qqqd dddd 1qqq format
-    spdlog::info("Building LDD Y+q part 2...");
+    spdlog::trace("Building LDD Y+q...");
     for (uint16_t q = 0; q < 64; q++) {
         for (uint16_t d = 0; d < 32; d++) {
-            // LDD Y+q
-            uint16_t op = 0x8000 | ((q & 0x20) << 6) | ((q & 0x18) << 7) | ((q & 0x07) << 4) | 0x0008 | (d << 5);
-            m_instruction_table[0x8000 | ((q & 0x20) << 8) | ((q & 0x18) << 7) | ((q & 0x07) << 4) | 0x0008 | (d << 4)] = &ATmegaInterpreter::exec_LD;
+            m_instruction_table[0x8000 | ((q & 0x20) << 8) | ((q & 0x18) << 7) | (d << 4) | 0x0008 | (q & 0x07)] = &ATmegaInterpreter::exec_LD;
         }
     }
-    spdlog::info("LDD Y+q part 2 done");
+    spdlog::trace("LDD Y+q done");
 
     // LDD Z+q: 10q0 qq0d dddd 0qqq where q is 0-63
-    spdlog::info("Building LDD Z+q...");
+    spdlog::trace("Building LDD Z+q...");
     for (uint16_t q = 0; q < 64; q++) {
         for (uint16_t d = 0; d < 32; d++) {
-            m_instruction_table[0x8000 | ((q & 0x20) << 8) | ((q & 0x18) << 7) | ((q & 0x07) << 4) | 0x0000 | (d << 4)] = &ATmegaInterpreter::exec_LD;
+            m_instruction_table[0x8000 | ((q & 0x20) << 8) | ((q & 0x18) << 7) | (d << 4) | 0x0000 | (q & 0x07)] = &ATmegaInterpreter::exec_LD;
         }
     }
-    spdlog::info("LDD Z+q done");
+    spdlog::trace("LDD Z+q done");
 
     // STD Y+q: 10q0 qq1d dddd 1qqq
-    spdlog::info("Building STD Y+q...");
+    spdlog::trace("Building STD Y+q...");
     for (uint16_t q = 0; q < 64; q++) {
         for (uint16_t d = 0; d < 32; d++) {
-            m_instruction_table[0x8200 | ((q & 0x20) << 8) | ((q & 0x18) << 7) | ((q & 0x07) << 4) | 0x0008 | (d << 4)] = &ATmegaInterpreter::exec_ST;
+            m_instruction_table[0x8200 | ((q & 0x20) << 8) | ((q & 0x18) << 7) | (d << 4) | 0x0008 | (q & 0x07)] = &ATmegaInterpreter::exec_ST;
         }
     }
-    spdlog::info("STD Y+q done");
+    spdlog::trace("STD Y+q done");
 
     // STD Z+q: 10q0 qq1d dddd 0qqq
-    spdlog::info("Building STD Z+q...");
+    spdlog::trace("Building STD Z+q...");
     for (uint16_t q = 0; q < 64; q++) {
         for (uint16_t d = 0; d < 32; d++) {
-            m_instruction_table[0x8200 | ((q & 0x20) << 8) | ((q & 0x18) << 7) | ((q & 0x07) << 4) | 0x0000 | (d << 4)] = &ATmegaInterpreter::exec_ST;
+            m_instruction_table[0x8200 | ((q & 0x20) << 8) | ((q & 0x18) << 7) | (d << 4) | 0x0000 | (q & 0x07)] = &ATmegaInterpreter::exec_ST;
         }
     }
-    spdlog::info("STD Z+q done");
+    spdlog::trace("STD Z+q done");
 
     // XCH: 1001 001d dddd 0100 (Exchange Z with Rd)
-    spdlog::info("Building XCH...");
+    spdlog::trace("Building XCH...");
     for (uint16_t d = 0; d < 32; d++) {
         m_instruction_table[0x9204 | (d << 4)] = &ATmegaInterpreter::exec_XCH;
     }
-    spdlog::info("XCH done");
+    spdlog::trace("XCH done");
 
     // LAS: 1001 001d dddd 0101 (Load and Set from Z)
-    spdlog::info("Building LAS...");
+    spdlog::trace("Building LAS...");
     for (uint16_t d = 0; d < 32; d++) {
         m_instruction_table[0x9205 | (d << 4)] = &ATmegaInterpreter::exec_LAS;
     }
-    spdlog::info("LAS done");
+    spdlog::trace("LAS done");
 
     // LAC: 1001 001d dddd 0110 (Load and Clear from Z)
-    spdlog::info("Building LAC...");
+    spdlog::trace("Building LAC...");
     for (uint16_t d = 0; d < 32; d++) {
         m_instruction_table[0x9206 | (d << 4)] = &ATmegaInterpreter::exec_LAC;
     }
-    spdlog::info("LAC done");
+    spdlog::trace("LAC done");
 
     // LAT: 1001 001d dddd 0111 (Load and Toggle from Z)
-    spdlog::info("Building LAT...");
+    spdlog::trace("Building LAT...");
     for (uint16_t d = 0; d < 32; d++) {
         m_instruction_table[0x9207 | (d << 4)] = &ATmegaInterpreter::exec_LAT;
     }
-    spdlog::info("LAT done");
+    spdlog::trace("LAT done");
 
     // ========================================
     // BIT AND BIT-TEST INSTRUCTIONS
     // ========================================
 
     // LSR: 1001 010d dddd 0110 (Logical Shift Right)
-    spdlog::info("Building LSR...");
+    spdlog::trace("Building LSR...");
     for (uint16_t d = 0; d < 32; d++) {
         m_instruction_table[0x9406 | (d << 4)] = &ATmegaInterpreter::exec_LSR;
     }
-    spdlog::info("LSR done");
+    spdlog::trace("LSR done");
 
     // ROR: 1001 010d dddd 0111 (Rotate Right)
-    spdlog::info("Building ROR...");
+    spdlog::trace("Building ROR...");
     for (uint16_t d = 0; d < 32; d++) {
         m_instruction_table[0x9407 | (d << 4)] = &ATmegaInterpreter::exec_ROR;
     }
-    spdlog::info("ROR done");
+    spdlog::trace("ROR done");
 
     // ASR: 1001 010d dddd 0101 (Arithmetic Shift Right)
-    spdlog::info("Building ASR...");
+    spdlog::trace("Building ASR...");
     for (uint16_t d = 0; d < 32; d++) {
         m_instruction_table[0x9405 | (d << 4)] = &ATmegaInterpreter::exec_ASR;
     }
-    spdlog::info("ASR done");
+    spdlog::trace("ASR done");
 
     // SWAP: 1001 010d dddd 0010 (Swap nibbles)
-    spdlog::info("Building SWAP...");
+    spdlog::trace("Building SWAP...");
     for (uint16_t d = 0; d < 32; d++) {
         m_instruction_table[0x9402 | (d << 4)] = &ATmegaInterpreter::exec_SWAP;
     }
-    spdlog::info("SWAP done");
+    spdlog::trace("SWAP done");
 
     // SBI: 1001 1010 AAAA Abbb (Set Bit in I/O Register)
-    spdlog::info("Building SBI...");
-    for (uint16_t op = 0x9A00; op <= 0x9AFF; op++) {
-        if ((op & 0x0F00) <= 0x0700 && (op & 0x000F) <= 0x0007) {
+    spdlog::trace("Building SBI...");
+    for (uint16_t addr = 0; addr < 32; addr++) {
+        for (uint16_t bit = 0; bit < 8; bit++) {
+            uint16_t op = 0x9A00 | (addr << 3) | bit;
             m_instruction_table[op] = &ATmegaInterpreter::exec_SBI;
         }
     }
-    spdlog::info("SBI done");
+    spdlog::trace("SBI done");
 
     // CBI: 1001 1000 AAAA Abbb (Clear Bit in I/O Register)
-    spdlog::info("Building CBI...");
-    for (uint16_t op = 0x9800; op <= 0x98FF; op++) {
-        if ((op & 0x0F00) <= 0x0700 && (op & 0x000F) <= 0x0007) {
+    spdlog::trace("Building CBI...");
+    for (uint16_t addr = 0; addr < 32; addr++) {
+        for (uint16_t bit = 0; bit < 8; bit++) {
+            uint16_t op = 0x9800 | (addr << 3) | bit;
             m_instruction_table[op] = &ATmegaInterpreter::exec_CBI;
         }
     }
-    spdlog::info("CBI done");
+    spdlog::trace("CBI done");
 
     // SBIC: 1001 1001 AAAA Abbb (Skip if Bit in I/O Register is Clear)
-    spdlog::info("Building SBIC...");
-    for (uint16_t op = 0x9900; op <= 0x99FF; op++) {
-        if ((op & 0x0F00) <= 0x0700 && (op & 0x000F) <= 0x0007) {
+    spdlog::trace("Building SBIC...");
+    for (uint16_t addr = 0; addr < 32; addr++) {
+        for (uint16_t bit = 0; bit < 8; bit++) {
+            uint16_t op = 0x9900 | (addr << 3) | bit;
             m_instruction_table[op] = &ATmegaInterpreter::exec_SBIC;
         }
     }
-    spdlog::info("SBIC done");
+    spdlog::trace("SBIC done");
 
     // SBIS: 1001 1011 AAAA Abbb (Skip if Bit in I/O Register is Set)
-    spdlog::info("Building SBIS...");
-    for (uint16_t op = 0x9B00; op <= 0x9BFF; op++) {
-        if ((op & 0x0F00) <= 0x0700 && (op & 0x000F) <= 0x0007) {
+    spdlog::trace("Building SBIS...");
+    for (uint16_t addr = 0; addr < 32; addr++) {
+        for (uint16_t bit = 0; bit < 8; bit++) {
+            uint16_t op = 0x9B00 | (addr << 3) | bit;
             m_instruction_table[op] = &ATmegaInterpreter::exec_SBIS;
         }
     }
-    spdlog::info("SBIS done");
+    spdlog::trace("SBIS done");
 
     // SBRC: 1111 110r rrrr 0bbb (Skip if Bit in Register is Clear)
-    // Range: 0xF800 to 0xFBFF (1024 opcodes)
-    spdlog::info("Building SBRC...");
-    for (uint16_t op = 0xF800; op < 0xFC00; op++) {
-        m_instruction_table[op] = &ATmegaInterpreter::exec_SBRC;
+    spdlog::trace("Building SBRC...");
+    for (uint16_t r = 0; r < 32; r++) {
+        for (uint16_t b = 0; b < 8; b++) {
+            uint16_t op = 0xFC00 | ((r & 0x10) << 4) | ((r & 0x0F) << 4) | b;
+            m_instruction_table[op] = &ATmegaInterpreter::exec_SBRC;
+        }
     }
-    spdlog::info("SBRC done");
+    spdlog::trace("SBRC done");
 
     // SBRS: 1111 111r rrrr 0bbb (Skip if Bit in Register is Set)
-    // Range: 0xFC00 to 0xFFFF (1024 opcodes)
-    spdlog::info("Building SBRS...");
-    for (int op = 0xFC00; op <= 0xFFFF; op++) {
-        m_instruction_table[op] = &ATmegaInterpreter::exec_SBRS;
+    spdlog::trace("Building SBRS...");
+    for (uint16_t r = 0; r < 32; r++) {
+        for (uint16_t b = 0; b < 8; b++) {
+            uint16_t op = 0xFE00 | ((r & 0x10) << 4) | ((r & 0x0F) << 4) | b;
+            m_instruction_table[op] = &ATmegaInterpreter::exec_SBRS;
+        }
     }
-    spdlog::info("SBRS done");
+    spdlog::trace("SBRS done");
 
     // BSET: 1001 0100 0bbb 1000 (Set Bit in SREG) - b is 0-7 (T, H, S, V, N, Z, C, I)
     // Actually: 1001 0100 1111 1000 (BSET S), 1001 0100 1110 1000 (BSET T), etc.
@@ -685,17 +547,17 @@ void ATmegaInterpreter::build_instruction_table() {
     m_instruction_table[0x94E8] = &ATmegaInterpreter::exec_CLT;  // CLT (Clear T)
     m_instruction_table[0x94F8] = &ATmegaInterpreter::exec_CLI;  // CLI (Clear I)
 
-    // BST: 1001 010d dddd 0110 (Bit Store from Register to T)
+    // BST: 1111 101d dddd 0bbb (Bit Store from Register to T)
     for (uint16_t d = 0; d < 32; d++) {
         for (uint16_t b = 0; b < 8; b++) {
-            m_instruction_table[0xF800 | (d << 4) | (b)] = &ATmegaInterpreter::exec_BST;
+            m_instruction_table[0xFA00 | (d << 4) | b] = &ATmegaInterpreter::exec_BST;
         }
     }
 
-    // BLD: 1001 010d dddd 0111 (Bit Load from T to Register)
+    // BLD: 1111 100d dddd 0bbb (Bit Load from T to Register)
     for (uint16_t d = 0; d < 32; d++) {
         for (uint16_t b = 0; b < 8; b++) {
-            m_instruction_table[0xF800 | (d << 4) | (b)] = &ATmegaInterpreter::exec_BLD;
+            m_instruction_table[0xF800 | (d << 4) | b] = &ATmegaInterpreter::exec_BLD;
         }
     }
 
@@ -749,22 +611,20 @@ void ATmegaInterpreter::build_instruction_table() {
 
     // JMP: 1001 010k kkkk 110k / 1001 010k kkkk 111k - already set above
 
-    // CALL: 1001 010k kkkk 111k (k varies, but NOT 0x940E/0x940F/0x950E/0x950F)
-    // CALL first word: bits 12-15 = 1001, bit 11 = 0, bit 10 = 1, bits 3-0 = 1110 (0xE) or 1111 (0xF)
-    // But 0x940E=IJMP, 0x940F=ICALL, 0x950E=EIJMP, 0x950F=EICALL are special cases
+    // CALL: 1001 010k kkkk 111k
     for (uint16_t h = 0x94; h <= 0x95; h++) {
         for (uint16_t k = 0; k < 4; k++) {
             uint16_t op = (h << 8) | (k << 4) | 0x000E;
-            if (op != 0x940E && op != 0x950E) {  // Skip IJMP and EIJMP
-                m_instruction_table[op] = &ATmegaInterpreter::exec_CALL;
-            }
+            m_instruction_table[op] = &ATmegaInterpreter::exec_CALL;
+            m_instruction_table[op | 0x0001] = &ATmegaInterpreter::exec_CALL;
         }
     }
 
-    // IJMP: 1001 0100 0000 1110 - already set above
-    // ICALL: 1001 0100 0000 1111 - already set above
-    // EIJMP: 1001 0101 0000 1110 - already set above
-    // EICALL: 1001 0101 0000 1111 - already set above
+    // Re-apply indirect opcodes after the broad CALL table.
+    m_instruction_table[0x9409] = &ATmegaInterpreter::exec_IJMP;
+    m_instruction_table[0x9419] = &ATmegaInterpreter::exec_EIJMP;
+    m_instruction_table[0x9509] = &ATmegaInterpreter::exec_ICALL;
+    m_instruction_table[0x9519] = &ATmegaInterpreter::exec_EICALL;
 
     // RET: 1001 0101 0000 1000 - already set above
 
@@ -829,35 +689,35 @@ void ATmegaInterpreter::build_instruction_table() {
     // ========================================
 
     // MOVW: 0000 0001 dddd rrrr (Copy Register Word, d and r are even)
-    spdlog::info("Building MOVW...");
+    spdlog::trace("Building MOVW...");
     for (uint16_t d = 0; d < 32; d += 2) {
         for (uint16_t r = 0; r < 32; r += 2) {
             uint16_t op = 0x0100 | ((d >> 1) << 4) | (r >> 1);
             m_instruction_table[op] = &ATmegaInterpreter::exec_MOVW;
         }
     }
-    spdlog::info("MOVW done");
+    spdlog::trace("MOVW done");
 
     // ADIW: 1001 0110 KKdd KKKK (Add Immediate to Word)
     // Valid for d=24,26,28,30 (X,Y,Z)
-    spdlog::info("Building ADIW...");
+    spdlog::trace("Building ADIW...");
     for (uint16_t q = 0; q < 4; q++) {
         for (uint16_t k = 0; k < 64; k++) {
             uint16_t op = 0x9600 | (q << 4) | ((k & 0x30) << 2) | (k & 0x0F);
             m_instruction_table[op] = &ATmegaInterpreter::exec_ADIW;
         }
     }
-    spdlog::info("ADIW done");
+    spdlog::trace("ADIW done");
 
     // SBIW: 1001 0111 KKdd KKKK (Subtract Immediate from Word)
-    spdlog::info("Building SBIW...");
+    spdlog::trace("Building SBIW...");
     for (uint16_t q = 0; q < 4; q++) {
         for (uint16_t k = 0; k < 64; k++) {
             uint16_t op = 0x9700 | (q << 4) | ((k & 0x30) << 2) | (k & 0x0F);
             m_instruction_table[op] = &ATmegaInterpreter::exec_SBIW;
         }
     }
-    spdlog::info("SBIW done");
+    spdlog::trace("SBIW done");
 
     // CBI: 1001 1000 AAAA Abbb - already set above
 
@@ -873,27 +733,27 @@ void ATmegaInterpreter::build_instruction_table() {
 
     // BRBC: 1111 01kk kkkk kbbb (Branch if Bit in SREG is Clear)
     // b=0: BRCS (same as BRLO), b=1: BREQ (same as BRIE for I bit), etc.
-    spdlog::info("Building BRBC...");
+    spdlog::trace("Building BRBC...");
     for (int b = 0; b < 8; b++) {
         for (int k = 0; k < 64; k++) {
             m_instruction_table[0xF400 | (k << 3) | b] = &ATmegaInterpreter::exec_BRBC;
         }
     }
-    spdlog::info("BRBC done");
+    spdlog::trace("BRBC done");
 
     // BRBS: 1111 00kk kkkk kbbb (Branch if Bit in SREG is Set)
-    spdlog::info("Building BRBS...");
+    spdlog::trace("Building BRBS...");
     for (int b = 0; b < 8; b++) {
         for (int k = 0; k < 64; k++) {
             m_instruction_table[0xF000 | (k << 3) | b] = &ATmegaInterpreter::exec_BRBS;
         }
     }
-    spdlog::info("BRBS done");
-    spdlog::info("Instruction table build complete!");
+    spdlog::trace("BRBS done");
+    spdlog::trace("Instruction table build complete!");
 }
 
 bool ATmegaInterpreter::load_firmware(const std::string& path) {
-    spdlog::info("Loading firmware into interpreter: {}", path);
+    spdlog::debug("Loading firmware into interpreter: {}", path);
 
     FirmwareLoader loader;
     if (!loader.load(path)) {
@@ -928,19 +788,37 @@ bool ATmegaInterpreter::load_firmware(const std::string& path) {
 
     reset();
 
-    spdlog::info("Firmware loaded: {} bytes, {} words, {} segments",
+    spdlog::debug("Firmware loaded: {} bytes, {} words, {} segments",
                  total_bytes, total_bytes / 2, memory_map.size());
+
+    if (spdlog::should_log(spdlog::level::trace)) {
+        uint16_t isr_vec = 16 * 2; // Timer0 OVF vector at word address 0x20
+        spdlog::trace("[MCU DEBUG] Timer0 OVF ISR vector: flash[0x{:04X}]=0x{:04X} flash[0x{:04X}]=0x{:04X}",
+                     isr_vec, m_flash[isr_vec], isr_vec+1, m_flash[isr_vec+1]);
+        uint16_t isr_target = m_flash[isr_vec + 1];
+        if (isr_target < m_flash.size()) {
+            spdlog::trace("[MCU DEBUG] ISR code at 0x{:04X}:", isr_target);
+            for (int i = 0; i < 20 && isr_target + i < m_flash.size(); i++) {
+                spdlog::trace("[MCU DEBUG]   flash[0x{:04X}] = 0x{:04X}", isr_target + i, m_flash[isr_target + i]);
+            }
+        }
+    }
+
     return true;
 }
 
 void ATmegaInterpreter::reset() {
     m_state.PC = 0x0000;  // Reset vector
-    m_state.SP = 0xFFFF;  // Stack starts at top of SRAM
+    m_state.SP = m_mcu.mcu_variant().ramend_data_addr;
     m_state.SREG = {};
     m_state.cycles = 0;
     m_instruction_count = 0;
+    m_timer0_cycle_accum = 0;
+    m_mcu.memory().reset();
+    m_mcu.memory().write_io(0x5D, m_state.SP & 0xFF);
+    m_mcu.memory().write_io(0x5E, (m_state.SP >> 8) & 0xFF);
 
-    spdlog::debug("Interpreter reset: PC=0x{:04X}, SP=0x{:04X}",
+    spdlog::debug("Interpreter reset: PC=0x{:08X}, SP=0x{:04X}",
                   m_state.PC, m_state.SP);
 }
 
@@ -951,7 +829,7 @@ bool ATmegaInterpreter::step() {
 
     // Check for breakpoint
     if (has_breakpoint(m_state.PC)) {
-        spdlog::info("Breakpoint hit at 0x{:04X}", m_state.PC);
+        spdlog::info("Breakpoint hit at 0x{:08X}", m_state.PC);
     }
 
     Instruction inst = decode_instruction(m_state.PC);
@@ -959,7 +837,9 @@ bool ATmegaInterpreter::step() {
     // Execute instruction BEFORE incrementing PC
     // This is important for multi-word instructions like JMP/CALL
     // that need to read the subsequent words
+    m_cycle_adjust = 0;
     bool continue_exec = execute_instruction(inst);
+    m_mcu.update_simulation(0.0);
 
     // Now increment PC (may have been modified by branches/calls)
     // For normal instructions, we add inst.size
@@ -968,10 +848,11 @@ bool ATmegaInterpreter::step() {
 
     // Check if this was a jump/call instruction
     uint16_t opcode = inst.opcode;
-    bool is_jump = ((opcode & 0xFE0F) == 0x940C || (opcode & 0xFE0F) == 0x940D ||
-                    (opcode & 0xFE0F) == 0x950C || (opcode & 0xFE0F) == 0x950D ||
-                    opcode == 0x940E || opcode == 0x950E ||  // IJMP, EIJMP
-                    opcode == 0x940F || opcode == 0x950F);  // ICALL, EICALL
+    bool is_jump = ((opcode & 0xFE0E) == 0x940C ||  // JMP
+                    (opcode & 0xFE0E) == 0x940E ||  // CALL
+                    opcode == 0x9409 || opcode == 0x9419 ||
+                    opcode == 0x9509 || opcode == 0x9519 ||
+                    opcode == 0x9508 || opcode == 0x9518);  // RET/RETI
 
     if (!is_jump && (opcode & 0xF000) != 0xC000 && (opcode & 0xF000) != 0xD000) {
         // Not JMP/CALL/RCALL/RJMP - increment PC normally
@@ -979,7 +860,9 @@ bool ATmegaInterpreter::step() {
     }
     // For JMP/CALL/RJMP/RCALL, PC is already set by the instruction handler
 
-    m_state.cycles += inst.cycles;
+    const uint8_t effective_cycles = static_cast<uint8_t>(inst.cycles + m_cycle_adjust);
+    m_state.cycles += effective_cycles;
+    update_timers(effective_cycles);
     m_instruction_count++;
 
     return continue_exec;
@@ -995,8 +878,52 @@ bool ATmegaInterpreter::step_instructions(uint32_t count) {
 }
 
 void ATmegaInterpreter::execute_for_us(uint32_t duration_us) {
-    uint64_t target_cycles = (uint64_t)duration_us * (F_CPU / 1000000);
+    const uint32_t f_cpu = m_mcu.clock_frequency();
+    uint64_t target_cycles = (uint64_t)duration_us * (f_cpu / 1000000);
     uint64_t start_cycles = m_state.cycles;
+
+    // Debug: Log first few calls to understand timing behavior
+    static uint32_t exec_call_count = 0;
+    exec_call_count++;
+    if (spdlog::should_log(spdlog::level::trace) &&
+        (exec_call_count <= 20 || exec_call_count % 1000 == 0)) {
+        const auto& v = m_mcu.mcu_variant();
+        uint8_t portb = m_mcu.memory().read_io(v.PORTB);
+        uint8_t ddrb = m_mcu.memory().read_io(v.DDRB);
+        uint8_t tccr0b = m_mcu.memory().read_io(v.TCCR0B);
+        uint8_t timsk0 = m_mcu.memory().read_io(v.TIMSK0);
+        uint8_t tcnt0 = m_mcu.memory().read_io(v.TCNT0);
+
+        // Scan SRAM for non-zero regions to find timer0 variables
+        int sram_nonzero_start = -1, sram_nonzero_end = -1;
+        uint32_t sram_sum = 0;
+        for (int i = 0; i < (int)m_mcu.memory().sram.size(); i++) {
+            sram_sum += m_mcu.memory().sram[i];
+            if (m_mcu.memory().sram[i] != 0) {
+                if (sram_nonzero_start < 0) sram_nonzero_start = i;
+                sram_nonzero_end = i;
+            }
+        }
+
+        spdlog::trace("[MCU DEBUG] execute_for_us({}) call #{}: PC=0x{:08X}, cycles={}, PORTB=0x{:02X}(D13={}), DDRB=0x{:02X}, TCCR0B=0x{:02X}, TIMSK0=0x{:02X}, TCNT0=0x{:02X}, SREG.I={}",
+                     duration_us, exec_call_count, m_state.PC, m_state.cycles,
+                     portb, (portb & 0x20) ? "HIGH" : "LOW",
+                     ddrb, tccr0b, timsk0, tcnt0, m_state.SREG.I);
+        spdlog::trace("[MCU DEBUG]   SP=0x{:04X}, SRAM sum={}, nonzero range=[{}:{}]",
+                     m_state.SP, sram_sum, sram_nonzero_start, sram_nonzero_end);
+
+        // Dump the nonzero SRAM region
+        if (sram_nonzero_start >= 0) {
+            std::string sram_hex;
+            for (int i = sram_nonzero_start; i <= sram_nonzero_end && i < sram_nonzero_start + 64; i++) {
+                char buf[8];
+                snprintf(buf, sizeof(buf), "%02X", m_mcu.memory().sram[i]);
+                sram_hex += buf;
+                if ((i - sram_nonzero_start) % 16 == 15) sram_hex += "\n              ";
+            }
+            spdlog::trace("[MCU DEBUG]   SRAM[{}:{}]= {}", sram_nonzero_start, sram_nonzero_end, sram_hex);
+        }
+    }
 
     while ((m_state.cycles - start_cycles) < target_cycles && is_loaded()) {
         if (!step()) {
@@ -1005,7 +932,69 @@ void ATmegaInterpreter::execute_for_us(uint32_t duration_us) {
     }
 }
 
-ATmegaInterpreter::Instruction ATmegaInterpreter::decode_instruction(uint16_t addr) const {
+void ATmegaInterpreter::update_timers(uint8_t cycles) {
+    const auto& v = m_mcu.mcu_variant();
+    uint8_t tccr0b = m_mcu.memory().read_io(v.TCCR0B);
+    uint8_t cs = tccr0b & 0x07;
+
+    uint16_t prescaler = 0;
+    switch (cs) {
+        case 1: prescaler = 1; break;
+        case 2: prescaler = 8; break;
+        case 3: prescaler = 64; break;
+        case 4: prescaler = 256; break;
+        case 5: prescaler = 1024; break;
+        default: return;
+    }
+
+    m_timer0_cycle_accum += cycles;
+    while (m_timer0_cycle_accum >= prescaler) {
+        m_timer0_cycle_accum -= prescaler;
+        uint8_t tcnt0 = m_mcu.memory().read_io(v.TCNT0);
+        tcnt0++;
+        m_mcu.memory().write_io(v.TCNT0, tcnt0);
+
+        if (tcnt0 == 0) {
+            uint8_t tifr0 = m_mcu.memory().read_io(v.TIFR0);
+            m_mcu.memory().write_io(v.TIFR0, tifr0 | 0x01);
+
+            uint8_t timsk0 = m_mcu.memory().read_io(v.TIMSK0);
+            uint8_t sreg_i = m_state.SREG.I;
+            if ((timsk0 & 0x01) && sreg_i) {
+                service_interrupt(16);
+                break;
+            }
+        }
+    }
+}
+
+void ATmegaInterpreter::service_interrupt(uint8_t vector_index) {
+    m_state.SREG.I = false;
+
+    const auto& v = m_mcu.mcu_variant();
+    const uint8_t pc_bytes = m_mcu.mcu_variant().pc_bytes;
+    uint32_t ret_addr = m_state.PC;
+    for (int i = static_cast<int>(pc_bytes) - 1; i >= 0; --i) {
+        m_mcu.memory().write_data(m_state.SP, (ret_addr >> (8 * i)) & 0xFF);
+        m_state.SP--;
+    }
+
+    if (vector_index == 16) {
+        uint8_t tifr0 = m_mcu.memory().read_io(v.TIFR0);
+        m_mcu.memory().write_io(v.TIFR0, tifr0 & ~0x01);
+    }
+
+    // PC is word-addressed and the ATmega328P vector table uses 2-word JMP
+    // entries, so vector N starts at word address N * 2.
+    uint32_t vector_pc = static_cast<uint32_t>(vector_index) * 2u;
+    if (vector_pc + 1 < m_flash.size() && (m_flash[vector_pc] & 0xFE0E) == 0x940C) {
+        m_state.PC = m_flash[vector_pc + 1];
+    } else {
+        m_state.PC = vector_pc;
+    }
+}
+
+ATmegaInterpreter::Instruction ATmegaInterpreter::decode_instruction(uint32_t addr) const {
     if (addr >= m_flash.size()) {
         return {0xFFFF, 0, "INVALID", 1, 1};
     }
@@ -1034,29 +1023,49 @@ ATmegaInterpreter::Instruction ATmegaInterpreter::decode_instruction(uint16_t ad
     }
 
     // Determine instruction size and cycles
-    if ((opcode & 0xFE0E) == 0x9200 || (opcode & 0xFE0E) == 0x9000) {
+    if ((opcode & 0xFE0F) == 0x9200 || (opcode & 0xFE0F) == 0x9000) {
         // STS/LDS - 2 words
         inst.size = 2;
         inst.cycles = 2;
-    } else if ((opcode & 0xFE0F) == 0x940C || (opcode & 0xFE0F) == 0x940D ||
-               (opcode & 0xFE0F) == 0x950C || (opcode & 0xFE0F) == 0x950D ||
-               (opcode & 0xFE0F) == 0x940E || (opcode & 0xFE0F) == 0x940F ||
-               (opcode & 0xFE0F) == 0x950E || (opcode & 0xFE0F) == 0x950F) {
+    } else if ((opcode & 0xFE0E) == 0x940C || (opcode & 0xFE0E) == 0x940E) {
         // JMP/CALL - 2 words
         inst.size = 2;
-        inst.cycles = 3;  // JMP takes 3 cycles
-    } else if ((opcode & 0xFE0F) == 0x9400) {
-        // Single-word instructions (non-JMP/CALL)
-        inst.cycles = 1;
+        inst.cycles = ((opcode & 0x000E) == 0x000E) ? 4 : 3;
     } else if ((opcode & 0xF000) == 0xC000 || (opcode & 0xF000) == 0xD000) {
         // RJMP/RCALL
         inst.size = 1;
-        inst.cycles = 2;
+        inst.cycles = ((opcode & 0xF000) == 0xD000) ? 3 : 2;
     } else if ((opcode & 0xFC00) == 0xF000 || (opcode & 0xFC00) == 0xF800 ||
                (opcode & 0xFE00) == 0xF000) {
         // Branch instructions
         inst.size = 1;
         inst.cycles = 1;  // 2 if taken
+    } else if ((opcode & 0xFE0F) == 0x920F || (opcode & 0xFE0F) == 0x900F) {
+        // PUSH/POP
+        inst.cycles = 2;
+    } else if (opcode == 0x9508 || opcode == 0x9518) {
+        // RET/RETI
+        inst.cycles = 4;
+    } else if (opcode == 0x9409 || opcode == 0x9419) {
+        // IJMP/EIJMP
+        inst.cycles = 2;
+    } else if (opcode == 0x9509 || opcode == 0x9519) {
+        // ICALL/EICALL
+        inst.cycles = 3;
+    } else if ((opcode & 0xFF00) == 0x9A00 || (opcode & 0xFF00) == 0x9800) {
+        // SBI/CBI
+        inst.cycles = 2;
+    } else if ((opcode & 0xFF00) == 0x9600 || (opcode & 0xFF00) == 0x9700) {
+        // ADIW/SBIW
+        inst.cycles = 2;
+    } else if ((opcode & 0xFC00) == 0x9C00 || (opcode & 0xFF00) == 0x0200 ||
+               (opcode & 0xFF88) == 0x0300 || (opcode & 0xFF88) == 0x0380 ||
+               (opcode & 0xFF88) == 0x03C0 || (opcode & 0xFF88) == 0x03E0) {
+        // MUL/MULS/MULSU/FMUL/FMULS/FMULSU
+        inst.cycles = 2;
+    } else if ((opcode & 0xFE0F) == 0x9400) {
+        // Remaining single-word instructions
+        inst.cycles = 1;
     }
 
     return inst;
@@ -1088,11 +1097,10 @@ bool ATmegaInterpreter::exec_MOV(const Instruction& inst) {
 }
 
 bool ATmegaInterpreter::exec_LDI(const Instruction& inst) {
-    uint8_t rd = get_rd(inst.opcode);
+    uint8_t rd = 16 + ((inst.opcode >> 4) & 0x0F);
     uint8_t k = get_k(inst.opcode);
 
-    // LDI works on registers 16-31 (r16-r31)
-    m_mcu.memory().gp_registers[16 + rd] = k;
+    m_mcu.memory().gp_registers[rd] = k;
     return true;
 }
 
@@ -1100,7 +1108,54 @@ bool ATmegaInterpreter::exec_STS(const Instruction& inst) {
     uint8_t rd = get_rd(inst.opcode);
     uint16_t addr = inst.operands;  // 16-bit address
 
-    m_mcu.memory().sram[addr] = m_mcu.memory().gp_registers[rd];
+    uint8_t value = m_mcu.memory().gp_registers[rd];
+
+    // Debug: Log STS writes to SRAM (addr >= 0x100) from ISR code region (0x0237+)
+    static uint32_t sts_sram_log_count = 0;
+    if (spdlog::should_log(spdlog::level::trace) && addr >= 0x100 && sts_sram_log_count < 30) {
+        // Only log if we're likely in ISR code (PC near 0x0237) or first few STS
+        if (m_state.PC >= 0x0230 || sts_sram_log_count < 15) {
+            spdlog::trace("[MCU DEBUG] STS R{} -> [0x{:04X}] = 0x{:02X} (PC=0x{:04X})",
+                         rd, addr, value, m_state.PC);
+            sts_sram_log_count++;
+        }
+    }
+
+    // If firmware writes directly to a PWM pin's PORT bit (e.g. via digitalWrite),
+    // Arduino core turns off PWM first. If that "turnOffPWM" path isn't exercised
+    // (or is compiled into a sequence we don't yet fully model), the pin would stay
+    // timer-driven forever. We mimic Arduino semantics here: a direct PORT write
+    // to a PWM-capable pin disables PWM output compare for that channel.
+    if (addr < m_mcu.mcu_variant().ramstart_data_addr) {
+        maybe_disable_pwm_on_port_write(addr, value);
+    }
+
+    m_mcu.memory().write_data(addr, value);
+
+    // Immediately verify the write
+    if (spdlog::should_log(spdlog::level::trace) && addr == 0x01B4) {
+        static uint32_t verify_count = 0;
+        verify_count++;
+        uint8_t verify = m_mcu.memory().read_data(addr);
+        uint8_t verify_sram = m_mcu.memory().sram[addr - 0x100];
+        spdlog::trace("[MCU DEBUG] STS VERIFY #{}: wrote 0x{:02X} to [0x{:04X}], readback=0x{:02X}, sram[0x{:X}]=0x{:02X}",
+                     verify_count, value, addr, verify, addr - 0x100, verify_sram);
+    }
+
+    if (addr == 0x5F) {
+        m_state.SREG.C = (value & 0x01) != 0;
+        m_state.SREG.Z = (value & 0x02) != 0;
+        m_state.SREG.N = (value & 0x04) != 0;
+        m_state.SREG.V = (value & 0x08) != 0;
+        m_state.SREG.S = (value & 0x10) != 0;
+        m_state.SREG.H = (value & 0x20) != 0;
+        m_state.SREG.T = (value & 0x40) != 0;
+        m_state.SREG.I = (value & 0x80) != 0;
+    } else if (addr == 0x5D) {
+        m_state.SP = (m_state.SP & 0xFF00) | value;
+    } else if (addr == 0x5E) {
+        m_state.SP = (m_state.SP & 0x00FF) | (static_cast<uint16_t>(value) << 8);
+    }
     return true;
 }
 
@@ -1108,27 +1163,155 @@ bool ATmegaInterpreter::exec_LDS(const Instruction& inst) {
     uint8_t rd = get_rd(inst.opcode);
     uint16_t addr = inst.operands;  // 16-bit address
 
-    m_mcu.memory().gp_registers[rd] = m_mcu.memory().sram[addr];
+    if (addr == 0x5F) {
+        m_mcu.memory().gp_registers[rd] =
+            (m_state.SREG.C ? 0x01 : 0) |
+            (m_state.SREG.Z ? 0x02 : 0) |
+            (m_state.SREG.N ? 0x04 : 0) |
+            (m_state.SREG.V ? 0x08 : 0) |
+            (m_state.SREG.S ? 0x10 : 0) |
+            (m_state.SREG.H ? 0x20 : 0) |
+            (m_state.SREG.T ? 0x40 : 0) |
+            (m_state.SREG.I ? 0x80 : 0);
+    } else if (addr == 0x5D) {
+        m_mcu.memory().gp_registers[rd] = m_state.SP & 0xFF;
+    } else if (addr == 0x5E) {
+        m_mcu.memory().gp_registers[rd] = (m_state.SP >> 8) & 0xFF;
+    } else {
+        m_mcu.memory().gp_registers[rd] = m_mcu.memory().read_data(addr);
+
+        // Debug: Log LDS reads from SRAM addresses near ISR timer variables
+        static uint32_t lds_timer_log_count = 0;
+        if (spdlog::should_log(spdlog::level::trace) &&
+            addr >= 0x01A0 && addr <= 0x01C0 && lds_timer_log_count < 50) {
+            uint8_t raw_sram = (addr >= 0x100 && (addr - 0x100) < (int)m_mcu.memory().sram.size())
+                               ? m_mcu.memory().sram[addr - 0x100] : 0xAA;
+            spdlog::trace("[MCU DEBUG] LDS R{} <- [0x{:04X}] = 0x{:02X} (raw sram[0x{:X}]=0x{:02X}, PC=0x{:04X})",
+                         rd, addr, m_mcu.memory().read_data(addr), addr - 0x100, raw_sram, m_state.PC);
+            lds_timer_log_count++;
+        }
+    }
     return true;
 }
 
 bool ATmegaInterpreter::exec_ST(const Instruction& inst) {
-    // Store using indirect addressing (X/Y/Z pointers)
-    // Simplified - just log
-    spdlog::trace("ST instruction (not fully implemented)");
+    uint16_t opcode = inst.opcode;
+    uint8_t rd = get_rd(opcode);
+
+    auto get_pair = [this](uint8_t low_reg) -> uint16_t {
+        return static_cast<uint16_t>(m_mcu.memory().gp_registers[low_reg]) |
+               (static_cast<uint16_t>(m_mcu.memory().gp_registers[low_reg + 1]) << 8);
+    };
+    auto set_pair = [this](uint8_t low_reg, uint16_t value) {
+        m_mcu.memory().gp_registers[low_reg] = value & 0xFF;
+        m_mcu.memory().gp_registers[low_reg + 1] = (value >> 8) & 0xFF;
+    };
+    auto q_displacement = [](uint16_t op) -> uint8_t {
+        return static_cast<uint8_t>(((op >> 8) & 0x20) | ((op >> 7) & 0x18) | (op & 0x07));
+    };
+
+    uint16_t addr = 0;
+    bool matched = true;
+
+    if ((opcode & 0xFE0F) == 0x920C) {          // ST X,Rr
+        addr = get_pair(26);
+    } else if ((opcode & 0xFE0F) == 0x920D) {   // ST X+,Rr
+        addr = get_pair(26);
+        set_pair(26, addr + 1);
+    } else if ((opcode & 0xFE0F) == 0x920E || (opcode & 0xFE0F) == 0x9A0C) { // ST -X,Rr
+        addr = get_pair(26) - 1;
+        set_pair(26, addr);
+    } else if ((opcode & 0xFE0F) == 0x9209) {   // ST Y+,Rr
+        addr = get_pair(28);
+        set_pair(28, addr + 1);
+    } else if ((opcode & 0xFE0F) == 0x920A || (opcode & 0xFE0F) == 0x9A0A) { // ST -Y/-Z,Rr
+        bool use_z = (opcode & 0x0008) == 0;
+        uint8_t low = use_z ? 30 : 28;
+        addr = get_pair(low) - 1;
+        set_pair(low, addr);
+    } else if ((opcode & 0xFE0F) == 0x9201) {   // ST Z+,Rr
+        addr = get_pair(30);
+        set_pair(30, addr + 1);
+    } else if ((opcode & 0xFE0F) == 0x9202) {   // ST -Z,Rr
+        addr = get_pair(30) - 1;
+        set_pair(30, addr);
+    } else if ((opcode & 0xD208) == 0x8208) {   // STD Y+q,Rr
+        addr = get_pair(28) + q_displacement(opcode);
+    } else if ((opcode & 0xD208) == 0x8200) {   // STD Z+q,Rr
+        addr = get_pair(30) + q_displacement(opcode);
+    } else {
+        matched = false;
+    }
+
+    if (matched) {
+        m_mcu.memory().write_data(addr, m_mcu.memory().gp_registers[rd]);
+    } else {
+        spdlog::trace("Unhandled ST opcode 0x{:04X}", opcode);
+    }
     return true;
 }
 
 bool ATmegaInterpreter::exec_LD(const Instruction& inst) {
-    // Load using indirect addressing
-    spdlog::trace("LD instruction (not fully implemented)");
+    uint16_t opcode = inst.opcode;
+    uint8_t rd = get_rd(opcode);
+
+    auto get_pair = [this](uint8_t low_reg) -> uint16_t {
+        return static_cast<uint16_t>(m_mcu.memory().gp_registers[low_reg]) |
+               (static_cast<uint16_t>(m_mcu.memory().gp_registers[low_reg + 1]) << 8);
+    };
+    auto set_pair = [this](uint8_t low_reg, uint16_t value) {
+        m_mcu.memory().gp_registers[low_reg] = value & 0xFF;
+        m_mcu.memory().gp_registers[low_reg + 1] = (value >> 8) & 0xFF;
+    };
+    auto q_displacement = [](uint16_t op) -> uint8_t {
+        return static_cast<uint8_t>(((op >> 8) & 0x20) | ((op >> 7) & 0x18) | (op & 0x07));
+    };
+
+    uint16_t addr = 0;
+    bool matched = true;
+
+    if ((opcode & 0xFE0F) == 0x900C) {          // LD Rd,X
+        addr = get_pair(26);
+    } else if ((opcode & 0xFE0F) == 0x900D) {   // LD Rd,X+
+        addr = get_pair(26);
+        set_pair(26, addr + 1);
+    } else if ((opcode & 0xFE0F) == 0x900E || (opcode & 0xFE0F) == 0x980C) { // LD Rd,-X
+        addr = get_pair(26) - 1;
+        set_pair(26, addr);
+    } else if ((opcode & 0xFE0F) == 0x9009) {   // LD Rd,Y+
+        addr = get_pair(28);
+        set_pair(28, addr + 1);
+    } else if ((opcode & 0xFE0F) == 0x900A || (opcode & 0xFE0F) == 0x980A) { // LD Rd,-Y/-Z
+        bool use_z = (opcode & 0x0008) == 0;
+        uint8_t low = use_z ? 30 : 28;
+        addr = get_pair(low) - 1;
+        set_pair(low, addr);
+    } else if ((opcode & 0xFE0F) == 0x9001) {   // LD Rd,Z+
+        addr = get_pair(30);
+        set_pair(30, addr + 1);
+    } else if ((opcode & 0xFE0F) == 0x9002) {   // LD Rd,-Z
+        addr = get_pair(30) - 1;
+        set_pair(30, addr);
+    } else if ((opcode & 0xD208) == 0x8008) {   // LDD Rd,Y+q
+        addr = get_pair(28) + q_displacement(opcode);
+    } else if ((opcode & 0xD208) == 0x8000) {   // LDD Rd,Z+q
+        addr = get_pair(30) + q_displacement(opcode);
+    } else {
+        matched = false;
+    }
+
+    if (matched) {
+        m_mcu.memory().gp_registers[rd] = m_mcu.memory().read_data(addr);
+    } else {
+        spdlog::trace("Unhandled LD opcode 0x{:04X}", opcode);
+    }
     return true;
 }
 
 bool ATmegaInterpreter::exec_PUSH(const Instruction& inst) {
     uint8_t rd = get_rd(inst.opcode);
 
-    m_mcu.memory().sram[m_state.SP] = m_mcu.memory().gp_registers[rd];
+    m_mcu.memory().write_data(m_state.SP, m_mcu.memory().gp_registers[rd]);
     m_state.SP--;
     return true;
 }
@@ -1137,7 +1320,7 @@ bool ATmegaInterpreter::exec_POP(const Instruction& inst) {
     uint8_t rd = get_rd(inst.opcode);
 
     m_state.SP++;
-    m_mcu.memory().gp_registers[rd] = m_mcu.memory().sram[m_state.SP];
+    m_mcu.memory().gp_registers[rd] = m_mcu.memory().read_data(m_state.SP);
     return true;
 }
 
@@ -1145,24 +1328,96 @@ bool ATmegaInterpreter::exec_IN(const Instruction& inst) {
     uint8_t rd = get_rd(inst.opcode);
     uint8_t addr = get_io_addr(inst.opcode);
 
-    m_mcu.memory().gp_registers[rd] = m_mcu.memory().read_io(addr);
+    if (addr == 0x3F) {
+        uint8_t sreg = (m_state.SREG.C ? 0x01 : 0) |
+                       (m_state.SREG.Z ? 0x02 : 0) |
+                       (m_state.SREG.N ? 0x04 : 0) |
+                       (m_state.SREG.V ? 0x08 : 0) |
+                       (m_state.SREG.S ? 0x10 : 0) |
+                       (m_state.SREG.H ? 0x20 : 0) |
+                       (m_state.SREG.T ? 0x40 : 0) |
+                       (m_state.SREG.I ? 0x80 : 0);
+        m_mcu.memory().gp_registers[rd] = sreg;
+    } else if (addr == 0x3D) {
+        m_mcu.memory().gp_registers[rd] = m_state.SP & 0xFF;
+    } else if (addr == 0x3E) {
+        m_mcu.memory().gp_registers[rd] = (m_state.SP >> 8) & 0xFF;
+    } else {
+        m_mcu.memory().gp_registers[rd] = m_mcu.memory().read_io(addr + 0x20);
+    }
     return true;
 }
 
 bool ATmegaInterpreter::exec_OUT(const Instruction& inst) {
-    uint8_t rr = get_rr(inst.opcode);
+    uint8_t rr = (inst.opcode >> 4) & 0x1F;
     uint8_t addr = get_io_addr(inst.opcode);
 
-    m_mcu.memory().write_io(addr, m_mcu.memory().gp_registers[rr]);
+    uint8_t value = m_mcu.memory().gp_registers[rr];
+    maybe_disable_pwm_on_port_write(static_cast<uint16_t>(addr + 0x20), value);
+    m_mcu.memory().write_io(addr + 0x20, value);
+    if (addr == 0x3F) {
+        m_state.SREG.C = (value & 0x01) != 0;
+        m_state.SREG.Z = (value & 0x02) != 0;
+        m_state.SREG.N = (value & 0x04) != 0;
+        m_state.SREG.V = (value & 0x08) != 0;
+        m_state.SREG.S = (value & 0x10) != 0;
+        m_state.SREG.H = (value & 0x20) != 0;
+        m_state.SREG.T = (value & 0x40) != 0;
+        m_state.SREG.I = (value & 0x80) != 0;
+    } else if (addr == 0x3D) {
+        m_state.SP = (m_state.SP & 0xFF00) | value;
+    } else if (addr == 0x3E) {
+        m_state.SP = (m_state.SP & 0x00FF) | (static_cast<uint16_t>(value) << 8);
+    }
     return true;
 }
 
+void ATmegaInterpreter::maybe_disable_pwm_on_port_write(uint16_t data_addr, uint8_t new_port_value) {
+    // Only applies to AVR variants where we map Arduino PWM pins explicitly.
+    const auto& v = m_mcu.mcu_variant();
+    if (v.name != "ATmega328P") return;
+
+    // We only care when writing to PORTB/PORTD for Uno PWM pins.
+    const bool is_portb = (data_addr == v.PORTB);
+    const bool is_portd = (data_addr == v.PORTD);
+    if (!is_portb && !is_portd) return;
+
+    const uint8_t old = m_mcu.memory().read_io(data_addr);
+    const uint8_t changed = static_cast<uint8_t>(old ^ new_port_value);
+    if (changed == 0) return;
+
+    auto clear_com_bits = [&](uint16_t tccrA_addr, uint8_t mask_to_clear) {
+        uint8_t t = m_mcu.memory().read_io(tccrA_addr);
+        t = static_cast<uint8_t>(t & ~mask_to_clear);
+        m_mcu.memory().write_io(tccrA_addr, t);
+    };
+
+    // Arduino Uno PWM pins:
+    // D3  = PD3 -> OC2B -> TCCR2A COM2B[1:0] bits 5:4 (mask 0x30)
+    // D5  = PD5 -> OC0B -> TCCR0A COM0B[1:0] bits 5:4 (mask 0x30)
+    // D6  = PD6 -> OC0A -> TCCR0A COM0A[1:0] bits 7:6 (mask 0xC0)
+    // D9  = PB1 -> OC1A -> TCCR1A COM1A[1:0] bits 7:6 (mask 0xC0)
+    // D10 = PB2 -> OC1B -> TCCR1A COM1B[1:0] bits 5:4 (mask 0x30)
+    // D11 = PB3 -> OC2A -> TCCR2A COM2A[1:0] bits 7:6 (mask 0xC0)
+
+    if (is_portd) {
+        if (changed & (1 << 3)) clear_com_bits(0xB0, 0x30); // TCCR2A COM2B
+        if (changed & (1 << 5)) clear_com_bits(0x44, 0x30); // TCCR0A COM0B
+        if (changed & (1 << 6)) clear_com_bits(0x44, 0xC0); // TCCR0A COM0A
+    }
+    if (is_portb) {
+        if (changed & (1 << 1)) clear_com_bits(0x80, 0xC0); // TCCR1A COM1A
+        if (changed & (1 << 2)) clear_com_bits(0x80, 0x30); // TCCR1A COM1B
+        if (changed & (1 << 3)) clear_com_bits(0xB0, 0xC0); // TCCR2A COM2A
+    }
+}
+
 bool ATmegaInterpreter::exec_ANDI(const Instruction& inst) {
-    uint8_t rd = get_rd(inst.opcode);
+    uint8_t rd = 16 + ((inst.opcode >> 4) & 0x0F);
     uint8_t k = get_k(inst.opcode);
 
-    uint8_t result = m_mcu.memory().gp_registers[16 + rd] & k;
-    m_mcu.memory().gp_registers[16 + rd] = result;
+    uint8_t result = m_mcu.memory().gp_registers[rd] & k;
+    m_mcu.memory().gp_registers[rd] = result;
 
     update_z_flag(result);
     update_n_flag(result);
@@ -1173,11 +1428,11 @@ bool ATmegaInterpreter::exec_ANDI(const Instruction& inst) {
 }
 
 bool ATmegaInterpreter::exec_ORI(const Instruction& inst) {
-    uint8_t rd = get_rd(inst.opcode);
+    uint8_t rd = 16 + ((inst.opcode >> 4) & 0x0F);
     uint8_t k = get_k(inst.opcode);
 
-    uint8_t result = m_mcu.memory().gp_registers[16 + rd] | k;
-    m_mcu.memory().gp_registers[16 + rd] = result;
+    uint8_t result = m_mcu.memory().gp_registers[rd] | k;
+    m_mcu.memory().gp_registers[rd] = result;
 
     update_z_flag(result);
     update_n_flag(result);
@@ -1360,28 +1615,30 @@ bool ATmegaInterpreter::exec_SBC(const Instruction& inst) {
     uint8_t a = m_mcu.memory().gp_registers[rd];
     uint8_t b = m_mcu.memory().gp_registers[rr];
     uint8_t c = m_state.SREG.C ? 1 : 0;
-    uint8_t result = a - b - c;
+    uint16_t wide_result = static_cast<uint16_t>(a) - static_cast<uint16_t>(b) - c;
+    uint8_t result = static_cast<uint8_t>(wide_result);
 
     m_mcu.memory().gp_registers[rd] = result;
 
-    update_z_flag(result);
+    bool prev_z = m_state.SREG.Z;
+    m_state.SREG.Z = prev_z && (result == 0);
     update_n_flag(result);
-    update_c_flag(a, b + c, true);
-    update_h_flag(a, b + c, true);
-    update_v_flag(a, b + c, result, true);
+    m_state.SREG.C = (wide_result & 0x100) != 0;
+    m_state.SREG.H = (a & 0x0F) < ((b & 0x0F) + c);
+    m_state.SREG.V = ((a ^ b) & (a ^ result) & 0x80) != 0;
     update_s_flag();
 
     return true;
 }
 
 bool ATmegaInterpreter::exec_SUBI(const Instruction& inst) {
-    uint8_t rd = get_rd(inst.opcode);
+    uint8_t rd = 16 + ((inst.opcode >> 4) & 0x0F);
     uint8_t k = get_k(inst.opcode);
 
-    uint8_t a = m_mcu.memory().gp_registers[16 + rd];
+    uint8_t a = m_mcu.memory().gp_registers[rd];
     uint8_t result = a - k;
 
-    m_mcu.memory().gp_registers[16 + rd] = result;
+    m_mcu.memory().gp_registers[rd] = result;
 
     update_z_flag(result);
     update_n_flag(result);
@@ -1394,46 +1651,54 @@ bool ATmegaInterpreter::exec_SUBI(const Instruction& inst) {
 }
 
 bool ATmegaInterpreter::exec_SBCI(const Instruction& inst) {
-    uint8_t rd = get_rd(inst.opcode);
+    uint8_t rd = 16 + ((inst.opcode >> 4) & 0x0F);
     uint8_t k = get_k(inst.opcode);
 
-    uint8_t a = m_mcu.memory().gp_registers[16 + rd];
+    uint8_t a = m_mcu.memory().gp_registers[rd];
     uint8_t c = m_state.SREG.C ? 1 : 0;
-    uint8_t result = a - k - c;
+    uint16_t wide_result = static_cast<uint16_t>(a) - static_cast<uint16_t>(k) - c;
+    uint8_t result = static_cast<uint8_t>(wide_result);
 
-    m_mcu.memory().gp_registers[16 + rd] = result;
+    m_mcu.memory().gp_registers[rd] = result;
 
-    update_z_flag(result);
+    bool prev_z = m_state.SREG.Z;
+    m_state.SREG.Z = prev_z && (result == 0);
     update_n_flag(result);
-    update_c_flag(a, k + c, true);
-    update_h_flag(a, k + c, true);
-    update_v_flag(a, k + c, result, true);
+    m_state.SREG.C = (wide_result & 0x100) != 0;
+    m_state.SREG.H = (a & 0x0F) < ((k & 0x0F) + c);
+    m_state.SREG.V = ((a ^ k) & (a ^ result) & 0x80) != 0;
     update_s_flag();
 
     return true;
 }
 
 bool ATmegaInterpreter::exec_RJMP(const Instruction& inst) {
-    int8_t offset = (int8_t)(inst.opcode & 0xFF);
+    int16_t offset = inst.opcode & 0x0FFF;
+    if (offset & 0x0800) {
+        offset |= 0xF000;
+    }
 
-    // Relative jump: PC = PC + offset + 1
-    m_state.PC = m_state.PC + offset;
+    // Relative jump target is PC + k + 1 (word address).
+    m_state.PC = static_cast<uint32_t>(m_state.PC + offset + 1);
 
     return true;
 }
 
 bool ATmegaInterpreter::exec_RCALL(const Instruction& inst) {
-    int8_t offset = (int8_t)(inst.opcode & 0xFF);
+    int16_t offset = inst.opcode & 0x0FFF;
+    if (offset & 0x0800) {
+        offset |= 0xF000;
+    }
 
-    // Push return address
-    uint16_t ret_addr = m_state.PC;
-    m_mcu.memory().sram[m_state.SP] = ret_addr & 0xFF;
-    m_state.SP--;
-    m_mcu.memory().sram[m_state.SP] = (ret_addr >> 8) & 0xFF;
-    m_state.SP--;
+    const uint8_t pc_bytes = m_mcu.mcu_variant().pc_bytes;
+    uint32_t ret_addr = m_state.PC + 1;
+    for (int i = static_cast<int>(pc_bytes) - 1; i >= 0; --i) {
+        m_mcu.memory().write_data(m_state.SP, (ret_addr >> (8 * i)) & 0xFF);
+        m_state.SP--;
+    }
 
     // Relative call
-    m_state.PC = m_state.PC + offset;
+    m_state.PC = static_cast<uint32_t>(m_state.PC + offset + 1);
 
     return true;
 }
@@ -1441,13 +1706,14 @@ bool ATmegaInterpreter::exec_RCALL(const Instruction& inst) {
 bool ATmegaInterpreter::exec_RET(const Instruction& inst) {
     (void)inst;
 
-    // Pop return address
-    m_state.SP++;
-    uint8_t ret_high = m_mcu.memory().sram[m_state.SP];
-    m_state.SP++;
-    uint8_t ret_low = m_mcu.memory().sram[m_state.SP];
-
-    m_state.PC = (ret_high << 8) | ret_low;
+    const uint8_t pc_bytes = m_mcu.mcu_variant().pc_bytes;
+    uint32_t addr = 0;
+    for (uint8_t i = 0; i < pc_bytes; ++i) {
+        m_state.SP++;
+        uint8_t b = m_mcu.memory().read_data(m_state.SP);
+        addr |= (static_cast<uint32_t>(b) << (8 * i));
+    }
+    m_state.PC = addr;
 
     return true;
 }
@@ -1455,13 +1721,28 @@ bool ATmegaInterpreter::exec_RET(const Instruction& inst) {
 bool ATmegaInterpreter::exec_RETI(const Instruction& inst) {
     exec_RET(inst);
     m_state.SREG.I = true;  // Enable interrupts
+
+    // Debug: Log first few RETI calls to verify ISR returns
+    static uint32_t reti_count = 0;
+    reti_count++;
+    if (spdlog::should_log(spdlog::level::trace) && reti_count <= 10) {
+        spdlog::trace("[MCU DEBUG] RETI #{}: returning to PC=0x{:08X}, SREG.I=true", reti_count, m_state.PC);
+    }
+
     return true;
 }
 
 bool ATmegaInterpreter::exec_CALL(const Instruction& inst) {
-    (void)inst;
-    // Full CALL implementation (3 words)
-    // Simplified for now
+    const uint8_t pc_bytes = m_mcu.mcu_variant().pc_bytes;
+    uint32_t target = inst.operands;
+    uint32_t ret_addr = m_state.PC + 2;
+
+    for (int i = static_cast<int>(pc_bytes) - 1; i >= 0; --i) {
+        m_mcu.memory().write_data(m_state.SP, (ret_addr >> (8 * i)) & 0xFF);
+        m_state.SP--;
+    }
+
+    m_state.PC = target;
     return true;
 }
 
@@ -1480,10 +1761,14 @@ bool ATmegaInterpreter::exec_JMP(const Instruction& inst) {
     //   addr[15:0] = second_word
     //   addr[21:16] = bits from first_word
 
-    uint16_t second_word = m_flash[m_state.PC + 1];  // Get second word (lower 16 bits of addr)
-
-    // For ATmega328P (16-bit PC), just use the second word as destination
+    uint16_t first_word = m_flash[m_state.PC];
+    uint16_t second_word = m_flash[m_state.PC + 1];  // lower 16 bits of addr
     uint32_t addr = second_word;
+
+    if (m_mcu.mcu_variant().pc_bytes == 3) {
+        uint32_t upper = ((first_word >> 3) & 0x1F) << 16;
+        addr |= upper;
+    }
 
     // JMP destination is a word address
     // Note: The step() function will add inst.size (2) after this,
@@ -1530,11 +1815,12 @@ bool ATmegaInterpreter::exec_ICALL(const Instruction& inst) {
     // Push return address, then jump to address in Z register
 
     // Push return address (current PC + 1 for the instruction after this)
-    uint16_t ret_addr = m_state.PC + 1;
-    m_mcu.memory().sram[m_state.SP] = ret_addr & 0xFF;
-    m_state.SP--;
-    m_mcu.memory().sram[m_state.SP] = (ret_addr >> 8) & 0xFF;
-    m_state.SP--;
+    const uint8_t pc_bytes = m_mcu.mcu_variant().pc_bytes;
+    uint32_t ret_addr = m_state.PC + 1;
+    for (int i = static_cast<int>(pc_bytes) - 1; i >= 0; --i) {
+        m_mcu.memory().write_data(m_state.SP, (ret_addr >> (8 * i)) & 0xFF);
+        m_state.SP--;
+    }
 
     // Jump to Z
     uint8_t z_low = m_mcu.memory().gp_registers[30];  // R30
@@ -1564,11 +1850,12 @@ bool ATmegaInterpreter::exec_EICALL(const Instruction& inst) {
     (void)inst;
     // EICALL - Extended Indirect Call
     // For ATmega328P, behaves like ICALL
-    uint16_t ret_addr = m_state.PC + 1;
-    m_mcu.memory().sram[m_state.SP] = ret_addr & 0xFF;
-    m_state.SP--;
-    m_mcu.memory().sram[m_state.SP] = (ret_addr >> 8) & 0xFF;
-    m_state.SP--;
+    const uint8_t pc_bytes = m_mcu.mcu_variant().pc_bytes;
+    uint32_t ret_addr = m_state.PC + 1;
+    for (int i = static_cast<int>(pc_bytes) - 1; i >= 0; --i) {
+        m_mcu.memory().write_data(m_state.SP, (ret_addr >> (8 * i)) & 0xFF);
+        m_state.SP--;
+    }
 
     uint8_t z_low = m_mcu.memory().gp_registers[30];
     uint8_t z_high = m_mcu.memory().gp_registers[31];
@@ -1604,24 +1891,38 @@ bool ATmegaInterpreter::exec_CPC(const Instruction& inst) {
     uint8_t a = m_mcu.memory().gp_registers[rd];
     uint8_t b = m_mcu.memory().gp_registers[rr];
     uint8_t c = m_state.SREG.C ? 1 : 0;
-    uint8_t result = a - b - c;
+    uint16_t wide_result = static_cast<uint16_t>(a) - static_cast<uint16_t>(b) - c;
+    uint8_t result = static_cast<uint8_t>(wide_result);
 
     // Only update flags (don't store result)
-    update_z_flag(result);
+    bool prev_z = m_state.SREG.Z;
+    m_state.SREG.Z = prev_z && (result == 0);
     update_n_flag(result);
-    update_c_flag(a, b + c, true);
-    update_h_flag(a, b + c, true);
-    update_v_flag(a, b + c, result, true);
+    m_state.SREG.C = (wide_result & 0x100) != 0;
+    m_state.SREG.H = (a & 0x0F) < ((b & 0x0F) + c);
+    m_state.SREG.V = ((a ^ b) & (a ^ result) & 0x80) != 0;
     update_s_flag();
 
     return true;
 }
 
-bool ATmegaInterpreter::exec_CPI(const Instruction& inst) {
+bool ATmegaInterpreter::exec_CPSE(const Instruction& inst) {
     uint8_t rd = get_rd(inst.opcode);
+    uint8_t rr = get_rr(inst.opcode);
+
+    if (m_mcu.memory().gp_registers[rd] == m_mcu.memory().gp_registers[rr]) {
+        Instruction next = decode_instruction(m_state.PC + 1);
+        m_state.PC += next.size;
+        m_cycle_adjust = next.size;
+    }
+    return true;
+}
+
+bool ATmegaInterpreter::exec_CPI(const Instruction& inst) {
+    uint8_t rd = 16 + ((inst.opcode >> 4) & 0x0F);
     uint8_t k = get_k(inst.opcode);
 
-    uint8_t a = m_mcu.memory().gp_registers[16 + rd];
+    uint8_t a = m_mcu.memory().gp_registers[rd];
     uint8_t result = a - k;
 
     update_z_flag(result);
@@ -1635,60 +1936,66 @@ bool ATmegaInterpreter::exec_CPI(const Instruction& inst) {
 }
 
 bool ATmegaInterpreter::exec_BREQ(const Instruction& inst) {
-    int8_t offset = (int8_t)(inst.opcode & 0xFF);
+    int8_t offset = get_q(inst.opcode);
 
     if (m_state.SREG.Z) {
         m_state.PC = m_state.PC + offset;
+        m_cycle_adjust = 1;
     }
 
     return true;
 }
 
 bool ATmegaInterpreter::exec_BRNE(const Instruction& inst) {
-    int8_t offset = (int8_t)(inst.opcode & 0xFF);
+    int8_t offset = get_q(inst.opcode);
 
     if (!m_state.SREG.Z) {
         m_state.PC = m_state.PC + offset;
+        m_cycle_adjust = 1;
     }
 
     return true;
 }
 
 bool ATmegaInterpreter::exec_BRSH(const Instruction& inst) {
-    int8_t offset = (int8_t)(inst.opcode & 0xFF);
+    int8_t offset = get_q(inst.opcode);
 
     if (!m_state.SREG.C) {
         m_state.PC = m_state.PC + offset;
+        m_cycle_adjust = 1;
     }
 
     return true;
 }
 
 bool ATmegaInterpreter::exec_BRLO(const Instruction& inst) {
-    int8_t offset = (int8_t)(inst.opcode & 0xFF);
+    int8_t offset = get_q(inst.opcode);
 
     if (m_state.SREG.C) {
         m_state.PC = m_state.PC + offset;
+        m_cycle_adjust = 1;
     }
 
     return true;
 }
 
 bool ATmegaInterpreter::exec_BRMI(const Instruction& inst) {
-    int8_t offset = (int8_t)(inst.opcode & 0xFF);
+    int8_t offset = get_q(inst.opcode);
 
     if (m_state.SREG.N) {
         m_state.PC = m_state.PC + offset;
+        m_cycle_adjust = 1;
     }
 
     return true;
 }
 
 bool ATmegaInterpreter::exec_BRPL(const Instruction& inst) {
-    int8_t offset = (int8_t)(inst.opcode & 0xFF);
+    int8_t offset = get_q(inst.opcode);
 
     if (!m_state.SREG.N) {
         m_state.PC = m_state.PC + offset;
+        m_cycle_adjust = 1;
     }
 
     return true;
@@ -1700,8 +2007,9 @@ bool ATmegaInterpreter::exec_SBRS(const Instruction& inst) {
     uint8_t bit = inst.opcode & 0x07;
 
     if (m_mcu.memory().gp_registers[rr] & (1 << bit)) {
-        // Skip next instruction (add 1 to PC to skip)
-        m_state.PC += 1;
+        Instruction next = decode_instruction(m_state.PC + 1);
+        m_state.PC += next.size;
+        m_cycle_adjust = next.size;
     }
     return true;
 }
@@ -1712,50 +2020,64 @@ bool ATmegaInterpreter::exec_SBRC(const Instruction& inst) {
     uint8_t bit = inst.opcode & 0x07;
 
     if (!(m_mcu.memory().gp_registers[rr] & (1 << bit))) {
-        // Skip next instruction
-        m_state.PC += 1;
+        Instruction next = decode_instruction(m_state.PC + 1);
+        m_state.PC += next.size;
+        m_cycle_adjust = next.size;
     }
     return true;
 }
 
 bool ATmegaInterpreter::exec_SBIC(const Instruction& inst) {
     // SBIC: Skip if Bit in I/O Register is Clear
-    uint8_t addr = ((inst.opcode >> 3) & 0x18) | (inst.opcode & 0x07);
-    uint8_t bit = (inst.opcode >> 4) & 0x07;
+    uint8_t addr = (inst.opcode >> 3) & 0x1F;
+    uint8_t bit = inst.opcode & 0x07;
 
-    uint8_t io_val = m_mcu.memory().read_io(addr);
+    uint8_t io_val = m_mcu.memory().read_io(addr + 0x20);
     if (!(io_val & (1 << bit))) {
-        // Skip next instruction
-        m_state.PC += 1;
+        Instruction next = decode_instruction(m_state.PC + 1);
+        m_state.PC += next.size;
+        m_cycle_adjust = next.size;
     }
     return true;
 }
 
 bool ATmegaInterpreter::exec_SBIS(const Instruction& inst) {
     // SBIS: Skip if Bit in I/O Register is Set
-    uint8_t addr = ((inst.opcode >> 3) & 0x18) | (inst.opcode & 0x07);
-    uint8_t bit = (inst.opcode >> 4) & 0x07;
+    uint8_t addr = (inst.opcode >> 3) & 0x1F;
+    uint8_t bit = inst.opcode & 0x07;
 
-    uint8_t io_val = m_mcu.memory().read_io(addr);
+    uint8_t io_val = m_mcu.memory().read_io(addr + 0x20);
     if (io_val & (1 << bit)) {
-        // Skip next instruction
-        m_state.PC += 1;
+        Instruction next = decode_instruction(m_state.PC + 1);
+        m_state.PC += next.size;
+        m_cycle_adjust = next.size;
     }
     return true;
 }
 
 bool ATmegaInterpreter::exec_LPM(const Instruction& inst) {
-    // Load from program memory using Z pointer
-    (void)inst;
-
-    // Z pointer = r31:r30
+    uint16_t opcode = inst.opcode;
     uint16_t z_addr = (m_mcu.memory().gp_registers[31] << 8) |
                       m_mcu.memory().gp_registers[30];
 
-    uint8_t data = m_flash[z_addr >> 1] & 0xFF;  // Low byte
+    uint16_t word_addr = z_addr >> 1;
+    uint16_t word = word_addr < m_flash.size() ? m_flash[word_addr] : 0xFFFF;
+    uint8_t data = (z_addr & 0x01) ? static_cast<uint8_t>(word >> 8)
+                                   : static_cast<uint8_t>(word & 0xFF);
 
-    // Store in r0 (default)
-    m_mcu.memory().gp_registers[0] = data;
+    uint8_t rd = 0;
+    bool post_increment = false;
+    if (opcode != 0x95C8) {
+        rd = get_rd(opcode);
+        post_increment = (opcode & 0x000F) == 0x0005;
+    }
+
+    m_mcu.memory().gp_registers[rd] = data;
+    if (post_increment) {
+        z_addr++;
+        m_mcu.memory().gp_registers[30] = z_addr & 0xFF;
+        m_mcu.memory().gp_registers[31] = (z_addr >> 8) & 0xFF;
+    }
 
     return true;
 }
@@ -1906,8 +2228,9 @@ bool ATmegaInterpreter::exec_ELPM(const Instruction& inst) {
     (void)inst;
 
     // RAMPZ:Z pointer for extended addressing (>64K)
-    uint8_t rampz = m_mcu.memory().gp_registers[33];  // RAMPZ is R33
-    uint16_t z_addr = (rampz << 16) | (m_mcu.memory().gp_registers[31] << 8) |
+    uint8_t rampz = m_mcu.memory().read_data(0x5B);  // RAMPZ data-space address on larger AVRs
+    uint32_t z_addr = (static_cast<uint32_t>(rampz) << 16) |
+                      (static_cast<uint32_t>(m_mcu.memory().gp_registers[31]) << 8) |
                       m_mcu.memory().gp_registers[30];
 
     uint8_t data = m_flash[(z_addr >> 1) % m_flash.size()] & 0xFF;
@@ -1990,24 +2313,24 @@ bool ATmegaInterpreter::exec_SWAP(const Instruction& inst) {
 
 bool ATmegaInterpreter::exec_SBI(const Instruction& inst) {
     // SBI: Set Bit in I/O Register
-    uint8_t addr = ((inst.opcode >> 3) & 0x18) | (inst.opcode & 0x07);  // I/O address
-    uint8_t bit = (inst.opcode >> 4) & 0x07;
+    uint8_t addr = (inst.opcode >> 3) & 0x1F;
+    uint8_t bit = inst.opcode & 0x07;
 
-    uint8_t io_val = m_mcu.memory().read_io(addr);
+    uint8_t io_val = m_mcu.memory().read_io(addr + 0x20);
     io_val |= (1 << bit);
-    m_mcu.memory().write_io(addr, io_val);
+    m_mcu.memory().write_io(addr + 0x20, io_val);
 
     return true;
 }
 
 bool ATmegaInterpreter::exec_CBI(const Instruction& inst) {
     // CBI: Clear Bit in I/O Register
-    uint8_t addr = ((inst.opcode >> 3) & 0x18) | (inst.opcode & 0x07);
-    uint8_t bit = (inst.opcode >> 4) & 0x07;
+    uint8_t addr = (inst.opcode >> 3) & 0x1F;
+    uint8_t bit = inst.opcode & 0x07;
 
-    uint8_t io_val = m_mcu.memory().read_io(addr);
+    uint8_t io_val = m_mcu.memory().read_io(addr + 0x20);
     io_val &= ~(1 << bit);
-    m_mcu.memory().write_io(addr, io_val);
+    m_mcu.memory().write_io(addr + 0x20, io_val);
 
     return true;
 }
@@ -2017,7 +2340,7 @@ bool ATmegaInterpreter::exec_CBI(const Instruction& inst) {
 // ========================================
 
 bool ATmegaInterpreter::exec_BRCS(const Instruction& inst) {
-    int8_t offset = static_cast<int8_t>(inst.opcode & 0xFF);
+    int8_t offset = get_q(inst.opcode);
     if (m_state.SREG.C) {
         m_state.PC = m_state.PC + offset;
     }
@@ -2025,7 +2348,7 @@ bool ATmegaInterpreter::exec_BRCS(const Instruction& inst) {
 }
 
 bool ATmegaInterpreter::exec_BRCC(const Instruction& inst) {
-    int8_t offset = static_cast<int8_t>(inst.opcode & 0xFF);
+    int8_t offset = get_q(inst.opcode);
     if (!m_state.SREG.C) {
         m_state.PC = m_state.PC + offset;
     }
@@ -2033,7 +2356,7 @@ bool ATmegaInterpreter::exec_BRCC(const Instruction& inst) {
 }
 
 bool ATmegaInterpreter::exec_BRGE(const Instruction& inst) {
-    int8_t offset = static_cast<int8_t>(inst.opcode & 0xFF);
+    int8_t offset = get_q(inst.opcode);
     if (!m_state.SREG.S) {
         m_state.PC = m_state.PC + offset;
     }
@@ -2041,7 +2364,7 @@ bool ATmegaInterpreter::exec_BRGE(const Instruction& inst) {
 }
 
 bool ATmegaInterpreter::exec_BRLT(const Instruction& inst) {
-    int8_t offset = static_cast<int8_t>(inst.opcode & 0xFF);
+    int8_t offset = get_q(inst.opcode);
     if (m_state.SREG.S) {
         m_state.PC = m_state.PC + offset;
     }
@@ -2049,7 +2372,7 @@ bool ATmegaInterpreter::exec_BRLT(const Instruction& inst) {
 }
 
 bool ATmegaInterpreter::exec_BRHS(const Instruction& inst) {
-    int8_t offset = static_cast<int8_t>(inst.opcode & 0xFF);
+    int8_t offset = get_q(inst.opcode);
     if (m_state.SREG.H) {
         m_state.PC = m_state.PC + offset;
     }
@@ -2057,7 +2380,7 @@ bool ATmegaInterpreter::exec_BRHS(const Instruction& inst) {
 }
 
 bool ATmegaInterpreter::exec_BRHC(const Instruction& inst) {
-    int8_t offset = static_cast<int8_t>(inst.opcode & 0xFF);
+    int8_t offset = get_q(inst.opcode);
     if (!m_state.SREG.H) {
         m_state.PC = m_state.PC + offset;
     }
@@ -2065,7 +2388,7 @@ bool ATmegaInterpreter::exec_BRHC(const Instruction& inst) {
 }
 
 bool ATmegaInterpreter::exec_BRTS(const Instruction& inst) {
-    int8_t offset = static_cast<int8_t>(inst.opcode & 0xFF);
+    int8_t offset = get_q(inst.opcode);
     if (m_state.SREG.T) {
         m_state.PC = m_state.PC + offset;
     }
@@ -2073,7 +2396,7 @@ bool ATmegaInterpreter::exec_BRTS(const Instruction& inst) {
 }
 
 bool ATmegaInterpreter::exec_BRTC(const Instruction& inst) {
-    int8_t offset = static_cast<int8_t>(inst.opcode & 0xFF);
+    int8_t offset = get_q(inst.opcode);
     if (!m_state.SREG.T) {
         m_state.PC = m_state.PC + offset;
     }
@@ -2081,7 +2404,7 @@ bool ATmegaInterpreter::exec_BRTC(const Instruction& inst) {
 }
 
 bool ATmegaInterpreter::exec_BRVS(const Instruction& inst) {
-    int8_t offset = static_cast<int8_t>(inst.opcode & 0xFF);
+    int8_t offset = get_q(inst.opcode);
     if (m_state.SREG.V) {
         m_state.PC = m_state.PC + offset;
     }
@@ -2089,7 +2412,7 @@ bool ATmegaInterpreter::exec_BRVS(const Instruction& inst) {
 }
 
 bool ATmegaInterpreter::exec_BRVC(const Instruction& inst) {
-    int8_t offset = static_cast<int8_t>(inst.opcode & 0xFF);
+    int8_t offset = get_q(inst.opcode);
     if (!m_state.SREG.V) {
         m_state.PC = m_state.PC + offset;
     }
@@ -2097,7 +2420,7 @@ bool ATmegaInterpreter::exec_BRVC(const Instruction& inst) {
 }
 
 bool ATmegaInterpreter::exec_BRIE(const Instruction& inst) {
-    int8_t offset = static_cast<int8_t>(inst.opcode & 0xFF);
+    int8_t offset = get_q(inst.opcode);
     if (m_state.SREG.I) {
         m_state.PC = m_state.PC + offset;
     }
@@ -2105,7 +2428,7 @@ bool ATmegaInterpreter::exec_BRIE(const Instruction& inst) {
 }
 
 bool ATmegaInterpreter::exec_BRID(const Instruction& inst) {
-    int8_t offset = static_cast<int8_t>(inst.opcode & 0xFF);
+    int8_t offset = get_q(inst.opcode);
     if (!m_state.SREG.I) {
         m_state.PC = m_state.PC + offset;
     }
@@ -2114,8 +2437,8 @@ bool ATmegaInterpreter::exec_BRID(const Instruction& inst) {
 
 bool ATmegaInterpreter::exec_BRBC(const Instruction& inst) {
     // BRBC: Branch if Bit in SREG is Clear
-    int8_t offset = static_cast<int8_t>(inst.opcode & 0xFF);
-    uint8_t bit = (inst.opcode >> 3) & 0x07;
+    int8_t offset = get_q(inst.opcode);
+    uint8_t bit = inst.opcode & 0x07;
 
     bool bit_set = false;
     switch (bit) {
@@ -2131,14 +2454,15 @@ bool ATmegaInterpreter::exec_BRBC(const Instruction& inst) {
 
     if (!bit_set) {
         m_state.PC = m_state.PC + offset;
+        m_cycle_adjust = 1;
     }
     return true;
 }
 
 bool ATmegaInterpreter::exec_BRBS(const Instruction& inst) {
     // BRBS: Branch if Bit in SREG is Set
-    int8_t offset = static_cast<int8_t>(inst.opcode & 0xFF);
-    uint8_t bit = (inst.opcode >> 3) & 0x07;
+    int8_t offset = get_q(inst.opcode);
+    uint8_t bit = inst.opcode & 0x07;
 
     bool bit_set = false;
     switch (bit) {
@@ -2154,6 +2478,7 @@ bool ATmegaInterpreter::exec_BRBS(const Instruction& inst) {
 
     if (bit_set) {
         m_state.PC = m_state.PC + offset;
+        m_cycle_adjust = 1;
     }
     return true;
 }
@@ -2299,8 +2624,8 @@ bool ATmegaInterpreter::exec_ADIW(const Instruction& inst) {
     // ADIW: Add Immediate to Word (Rd+1:Rd <- Rd+1:Rd + K)
     // Valid for Rd = 24, 26, 28, 30 (X, Y, Z pairs)
 
-    uint8_t q = (inst.opcode >> 3) & 0x06;  // q = 0, 2, 4, 6
-    uint8_t rd = 24 + q;  // R24:R25 for X, R26:R27 for Y, R28:R29 for Z, R30:R31
+    uint8_t dd = static_cast<uint8_t>((inst.opcode >> 4) & 0x03);
+    uint8_t rd = static_cast<uint8_t>(24 + (dd * 2));
 
     uint8_t k = ((inst.opcode >> 2) & 0x30) | (inst.opcode & 0x0F);
 
@@ -2319,13 +2644,14 @@ bool ATmegaInterpreter::exec_ADIW(const Instruction& inst) {
                      ((k & ~result & 0x8000) != 0);
     m_state.SREG.S = m_state.SREG.N != m_state.SREG.V;
 
+    m_cycle_adjust = 1;  // ADIW is 2 cycles total
     return true;
 }
 
 bool ATmegaInterpreter::exec_SBIW(const Instruction& inst) {
     // SBIW: Subtract Immediate from Word
-    uint8_t q = (inst.opcode >> 3) & 0x06;
-    uint8_t rd = 24 + q;
+    uint8_t dd = static_cast<uint8_t>((inst.opcode >> 4) & 0x03);
+    uint8_t rd = static_cast<uint8_t>(24 + (dd * 2));
 
     uint8_t k = ((inst.opcode >> 2) & 0x30) | (inst.opcode & 0x0F);
 
@@ -2344,6 +2670,7 @@ bool ATmegaInterpreter::exec_SBIW(const Instruction& inst) {
                      ((k & ~result & 0x8000) != 0);
     m_state.SREG.S = m_state.SREG.N != m_state.SREG.V;
 
+    m_cycle_adjust = 1;  // SBIW is 2 cycles total
     return true;
 }
 
@@ -2459,12 +2786,20 @@ uint8_t ATmegaInterpreter::get_rd(uint16_t opcode) const {
 }
 
 uint8_t ATmegaInterpreter::get_rr(uint16_t opcode) const {
-    return opcode & 0x0F;
+    return (opcode & 0x0F) | ((opcode >> 5) & 0x10);
 }
 
 uint8_t ATmegaInterpreter::get_k(uint16_t opcode) const {
     uint8_t k = ((opcode >> 4) & 0xF0) | (opcode & 0x0F);
     return k;
+}
+
+int8_t ATmegaInterpreter::get_q(int16_t opcode) const {
+    int8_t offset = static_cast<int8_t>((opcode >> 3) & 0x7F);
+    if (offset & 0x40) {
+        offset |= static_cast<int8_t>(0x80);
+    }
+    return offset;
 }
 
 uint8_t ATmegaInterpreter::get_io_addr(uint16_t opcode) const {
@@ -2473,12 +2808,12 @@ uint8_t ATmegaInterpreter::get_io_addr(uint16_t opcode) const {
 
 // ===== Breakpoint Management =====
 
-void ATmegaInterpreter::set_breakpoint(uint16_t addr) {
+void ATmegaInterpreter::set_breakpoint(uint32_t addr) {
     m_breakpoints[addr] = true;
-    spdlog::debug("Breakpoint set at 0x{:04X}", addr);
+    spdlog::debug("Breakpoint set at 0x{:08X}", addr);
 }
 
-void ATmegaInterpreter::clear_breakpoint(uint16_t addr) {
+void ATmegaInterpreter::clear_breakpoint(uint32_t addr) {
     m_breakpoints.erase(addr);
 }
 
@@ -2486,7 +2821,7 @@ void ATmegaInterpreter::clear_all_breakpoints() {
     m_breakpoints.clear();
 }
 
-bool ATmegaInterpreter::has_breakpoint(uint16_t addr) const {
+bool ATmegaInterpreter::has_breakpoint(uint32_t addr) const {
     return m_breakpoints.find(addr) != m_breakpoints.end();
 }
 

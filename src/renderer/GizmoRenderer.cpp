@@ -578,7 +578,7 @@ bool GizmoRenderer::on_mouse_down(float x, float y, const Camera& camera, const 
     m_is_dragging = true;
     m_active_axis = m_hover_axis;
 
-    spdlog::info("Gizmo on_mouse_down: x={:.1f} y={:.1f}, hover_axis={}, clicked={}",
+    spdlog::debug("Gizmo on_mouse_down: x={:.1f} y={:.1f}, hover_axis={}, clicked={}",
                  x, y, static_cast<int>(m_hover_axis), m_active_axis != GizmoAxis::None);
 
     // Reset deltas
@@ -814,7 +814,7 @@ bool GizmoRenderer::ray_intersect_axis(const Vec3& ray_origin, const Vec3& ray_d
         t_axis = (a * e - b * d) / denom;
     }
 
-    spdlog::info("ray_intersect_axis: t_ray={:.3f}, t_axis={:.3f}", t_ray, t_axis);
+    spdlog::trace("ray_intersect_axis: t_ray={:.3f}, t_axis={:.3f}", t_ray, t_axis);
 
     // Clamp t_axis to segment [0, axis_length]
     float original_t_axis = t_axis;
@@ -827,11 +827,11 @@ bool GizmoRenderer::ray_intersect_axis(const Vec3& ray_origin, const Vec3& ray_d
     // Project this point onto the ray: t_ray = dot(clamped_axis_point - ro, rd)
     t_ray = glm::dot(clamped_axis_point - ro, rd);
 
-    spdlog::info("ray_intersect_axis: clamped t_ray={:.3f}, t_axis={:.3f}", t_ray, t_axis);
+    spdlog::trace("ray_intersect_axis: clamped t_ray={:.3f}, t_axis={:.3f}", t_ray, t_axis);
 
     // Check if ray intersection point is in front
     if (t_ray < 0) {
-        spdlog::info("ray_intersect_axis: t_ray NEGATIVE after clamp");
+        spdlog::trace("ray_intersect_axis: t_ray NEGATIVE after clamp");
         return false;
     }
 
@@ -847,7 +847,7 @@ bool GizmoRenderer::ray_intersect_axis(const Vec3& ray_origin, const Vec3& ray_d
     float distance_to_gizmo = glm::length(ro - ap);
     float threshold = 0.4f * m_size * (distance_to_gizmo / 2.0f);
 
-    spdlog::info("ray_intersect_axis: distance={:.3f}, threshold={:.3f}, HIT={}", distance, threshold, distance < threshold);
+    spdlog::trace("ray_intersect_axis: distance={:.3f}, threshold={:.3f}, HIT={}", distance, threshold, distance < threshold);
 
     if (distance < threshold) {
         t = t_ray;
@@ -894,7 +894,7 @@ bool GizmoRenderer::ray_intersect_circle(const Vec3& ray_origin, const Vec3& ray
     float distance = glm::length(intersection - cc);
     float threshold = 0.2f * m_size;  // Fixed threshold for circle edge clicking
 
-    spdlog::info("ray_intersect_circle: distance={:.3f}, radius={:.3f}, threshold={:.3f}, HIT={}",
+    spdlog::trace("ray_intersect_circle: distance={:.3f}, radius={:.3f}, threshold={:.3f}, HIT={}",
                  distance, radius, threshold, std::abs(distance - radius) < threshold);
 
     if (std::abs(distance - radius) < threshold) {
@@ -998,7 +998,7 @@ Vec3 GizmoRenderer::screen_to_world(float x, float y, const Camera& camera) cons
     glm::vec3 ray_dir_world = right * ray_dir_camera.x + up * ray_dir_camera.y + forward * (-ray_dir_camera.z);
     ray_dir_world = glm::normalize(ray_dir_world);
 
-    spdlog::info("screen_to_world: screen=({:.1f},{:.1f}), ndc=({:.3f},{:.3f}), ray_dir_world=({:.3f},{:.3f},{:.3f})",
+    spdlog::trace("screen_to_world: screen=({:.1f},{:.1f}), ndc=({:.3f},{:.3f}), ray_dir_world=({:.3f},{:.3f},{:.3f})",
                  x, y, ndc_x, ndc_y, ray_dir_world.x, ray_dir_world.y, ray_dir_world.z);
 
     return {ray_dir_world.x, ray_dir_world.y, ray_dir_world.z};

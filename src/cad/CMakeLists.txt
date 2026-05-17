@@ -5,6 +5,9 @@ target_sources(mechatron_core
     PRIVATE
         CADKernel.cpp
         OpenCascadeWrapper.cpp
+        ModelAssetLibrary.cpp
+        ModifierEngine.cpp
+        EditableMesh.cpp
 )
 
 target_include_directories(mechatron_core

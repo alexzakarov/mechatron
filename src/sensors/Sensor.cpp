@@ -189,7 +189,7 @@ void Potentiometer::update(double dt) {
     m_angle = m_min_angle + normalized_pos * (m_max_angle - m_min_angle);
 
     // Check if V+ and GND are connected for voltage divider
-    float v_plus = 5.0f;  // Default 5V if not connected
+    float v_plus = default_max_voltage();  // Default supply voltage
     float v_gnd = 0.0f;
 
     if (m_v_plus_port && !m_v_plus_port->connections().empty()) {

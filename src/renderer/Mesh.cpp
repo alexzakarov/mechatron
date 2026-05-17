@@ -4,6 +4,28 @@
 
 namespace mechatron {
 
+Mesh::~Mesh() {
+    cleanup();
+}
+
+Mesh::Mesh(Mesh&& other) noexcept
+    : vertices(std::move(other.vertices)),
+      indices(std::move(other.indices)),
+      vao(other.vao), vbo(other.vbo), ebo(other.ebo) {
+    other.vao = other.vbo = other.ebo = 0;
+}
+
+Mesh& Mesh::operator=(Mesh&& other) noexcept {
+    if (this != &other) {
+        cleanup();
+        vertices = std::move(other.vertices);
+        indices = std::move(other.indices);
+        vao = other.vao; vbo = other.vbo; ebo = other.ebo;
+        other.vao = other.vbo = other.ebo = 0;
+    }
+    return *this;
+}
+
 void Mesh::upload() {
     glGenVertexArrays(1, &vao);
     glGenBuffers(1, &vbo);
@@ -32,6 +54,29 @@ void Mesh::draw() const {
     if (!vao) return;
     glBindVertexArray(vao);
     glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(indices.size()), GL_UNSIGNED_INT, nullptr);
+    glBindVertexArray(0);
+}
+
+void Mesh::draw_lines() const {
+    if (!vao) return;
+    glBindVertexArray(vao);
+    if (!indices.empty()) {
+        glDrawElements(GL_LINES, static_cast<GLsizei>(indices.size()), GL_UNSIGNED_INT, nullptr);
+    } else {
+        glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(vertices.size()));
+    }
+    glBindVertexArray(0);
+}
+
+void Mesh::draw_points(float point_size) const {
+    if (!vao) return;
+    glPointSize(point_size);
+    glBindVertexArray(vao);
+    if (!indices.empty()) {
+        glDrawElements(GL_POINTS, static_cast<GLsizei>(indices.size()), GL_UNSIGNED_INT, nullptr);
+    } else {
+        glDrawArrays(GL_POINTS, 0, static_cast<GLsizei>(vertices.size()));
+    }
     glBindVertexArray(0);
 }
 
@@ -153,10 +198,12 @@ Mesh Mesh::create_grid(float size, int divisions) {
 
     for (int i = 0; i <= divisions; ++i) {
         float pos = -half + i * step;
+        uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
         mesh.vertices.push_back({{pos, 0, -half}, {0, 1, 0}});
         mesh.vertices.push_back({{pos, 0,  half}, {0, 1, 0}});
         mesh.vertices.push_back({{-half, 0, pos}, {0, 1, 0}});
         mesh.vertices.push_back({{ half, 0, pos}, {0, 1, 0}});
+        mesh.indices.insert(mesh.indices.end(), {base, base + 1, base + 2, base + 3});
     }
 
     mesh.upload();

@@ -7,12 +7,19 @@
 #include "sensors/Sensor.hpp"
 #include "electronics/CircuitComponentAdapter.hpp"
 #include "electronics/CircuitSimulator.hpp"
+#include "ui/SchematicSymbol.hpp"
 #include <imgui.h>
 #include <spdlog/spdlog.h>
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
+#include <nlohmann/json.hpp>
 
 namespace mechatron {
+
+// Helpers (defined below)
+static nlohmann::json symbol_to_json(const SchematicSymbol& sym);
 
 // ============================================================================
 // Type Mapping
@@ -47,6 +54,7 @@ std::pair<std::string, std::string> CircuitEditor::map_type_to_plugin(const std:
         {"servo_motor",       {"mech_machine_elements", "servo_motor"}},
         {"pid_controller",    {"soft_control",       "pid_controller"}},
         {"pi_controller",     {"soft_control",       "pi_controller"}},
+        {"oscilloscope",      {"instrument",         "oscilloscope"}},
     };
 
     auto it = mapping.find(type);
@@ -106,7 +114,8 @@ void CircuitEditor::sync_from_registry() {
         bool is_circuit = (cat == "electronic" || cat == "passive" || cat == "semiconductor" ||
                           cat == "optoelectronic" || cat == "power" || cat == "mcu" ||
                           cat == "actuator" || cat == "sensor" || cat == "control" ||
-                          cat == "estimator" || cat == "thermal" || cat == "magnetic");
+                          cat == "estimator" || cat == "thermal" || cat == "magnetic" ||
+                          cat == "instrument");
 
         if (!is_circuit) return;
 
@@ -210,14 +219,10 @@ void CircuitEditor::add_node(const std::string& type) {
     m_selected_node_id = id;
     m_selected_wire_index = -1;  // Deselect wire
     sync_selection_to_orchestrator();
-
-    spdlog::info("Added circuit component: {} ({})", type, id);
 }
 
 void CircuitEditor::add_esc_template() {
     if (!m_orchestrator) return;
-
-    spdlog::info("[ESC_TEMPLATE] Adding 3-phase ESC template...");
 
     // Save current node count for positioning
     size_t start_node_count = m_nodes.size();
@@ -227,7 +232,6 @@ void CircuitEditor::add_esc_template() {
                                                 const char* id, float x, float y) -> Component* {
         Component* comp = m_orchestrator->create_component(plugin, type, id);
         if (!comp) {
-            spdlog::warn("[ESC_TEMPLATE] Failed to create: {}/{}", plugin, type);
             return nullptr;
         }
 
@@ -240,51 +244,69 @@ void CircuitEditor::add_esc_template() {
         node.pins_dirty = true;
         m_nodes.push_back(node);
 
-        spdlog::info("[ESC_TEMPLATE] Added component: {} ({})", id, type);
         return comp;
     };
 
-    float start_x = 100.0f;
-    float start_y = 100.0f;
+    // ESC Template Layout Configuration
+    struct ESCTemplateLayout {
+        // Origin position
+        float start_x = 100.0f;
+        float start_y = 100.0f;
+
+        // Vertical spacing
+        float power_supply_offset = 0.0f;
+        float mosfet_row_offset = 200.0f;
+        float gate_drive_offset = 400.0f;
+        float gate_resistor_offset = 550.0f;
+        float motor_winding_offset = 680.0f;
+
+        // Horizontal spacing
+        float phase_spacing = 150.0f;  // Space between A/B/C phases
+        float high_low_spacing = 80.0f;  // Space between high/low MOSFETs
+        float gate_source_spacing = 60.0f;  // Space between gate drive sources
+        float gate_resistor_x_offset = 60.0f;  // X offset for gate resistors
+        float gate_resistor_y_spacing = 40.0f;  // Y spacing for gate resistors
+        float resistor_x_spacing = 120.0f;  // Additional X spacing for resistors
+        float motor_winding_spacing = 120.0f;  // Space between motor windings
+        float motor_winding_x_offset = 30.0f;  // X offset for motor windings
+    } layout;
 
     // 1. Power Supply
-    add_comp("elec_power", "dc_voltage", "BAT", start_x, start_y);
-    add_comp("elec_passive", "ground", "GND", start_x, start_y + 80);
+    add_comp("elec_power", "dc_voltage", "BAT", layout.start_x, layout.start_y + layout.power_supply_offset);
+    add_comp("elec_passive", "ground", "GND", layout.start_x, layout.start_y + layout.power_supply_offset + layout.high_low_spacing);
 
     // 2. 6 MOSFETs (3 half-bridges)
-    float mosfet_y = start_y + 200;
-    add_comp("elec_semiconductor", "mosfet_n", "AH", start_x, mosfet_y);      // High-side A
-    add_comp("elec_semiconductor", "mosfet_n", "AL", start_x, mosfet_y + 80);  // Low-side A
-    add_comp("elec_semiconductor", "mosfet_n", "BH", start_x + 150, mosfet_y);  // High-side B
-    add_comp("elec_semiconductor", "mosfet_n", "BL", start_x + 150, mosfet_y + 80); // Low-side B
-    add_comp("elec_semiconductor", "mosfet_n", "CH", start_x + 300, mosfet_y);  // High-side C
-    add_comp("elec_semiconductor", "mosfet_n", "CL", start_x + 300, mosfet_y + 80); // Low-side C
+    float mosfet_y = layout.start_y + layout.mosfet_row_offset;
+    add_comp("elec_semiconductor", "mosfet_n", "AH", layout.start_x, mosfet_y);  // High-side A
+    add_comp("elec_semiconductor", "mosfet_n", "AL", layout.start_x, mosfet_y + layout.high_low_spacing);  // Low-side A
+    add_comp("elec_semiconductor", "mosfet_n", "BH", layout.start_x + layout.phase_spacing, mosfet_y);  // High-side B
+    add_comp("elec_semiconductor", "mosfet_n", "BL", layout.start_x + layout.phase_spacing, mosfet_y + layout.high_low_spacing);  // Low-side B
+    add_comp("elec_semiconductor", "mosfet_n", "CH", layout.start_x + 2.0f * layout.phase_spacing, mosfet_y);  // High-side C
+    add_comp("elec_semiconductor", "mosfet_n", "CL", layout.start_x + 2.0f * layout.phase_spacing, mosfet_y + layout.high_low_spacing);  // Low-side C
 
     // 3. Gate Drive Sources
-    float gate_y = start_y + 400;
-    add_comp("elec_power", "dc_voltage", "G_AH", start_x, gate_y);
-    add_comp("elec_power", "dc_voltage", "G_AL", start_x, gate_y + 60);
-    add_comp("elec_power", "dc_voltage", "G_BH", start_x + 150, gate_y);
-    add_comp("elec_power", "dc_voltage", "G_BL", start_x + 150, gate_y + 60);
-    add_comp("elec_power", "dc_voltage", "G_CH", start_x + 300, gate_y);
-    add_comp("elec_power", "dc_voltage", "G_CL", start_x + 300, gate_y + 60);
+    float gate_y = layout.start_y + layout.gate_drive_offset;
+    add_comp("elec_power", "dc_voltage", "G_AH", layout.start_x, gate_y);
+    add_comp("elec_power", "dc_voltage", "G_AL", layout.start_x, gate_y + layout.gate_source_spacing);
+    add_comp("elec_power", "dc_voltage", "G_BH", layout.start_x + layout.phase_spacing, gate_y);
+    add_comp("elec_power", "dc_voltage", "G_BL", layout.start_x + layout.phase_spacing, gate_y + layout.gate_source_spacing);
+    add_comp("elec_power", "dc_voltage", "G_CH", layout.start_x + 2.0f * layout.phase_spacing, gate_y);
+    add_comp("elec_power", "dc_voltage", "G_CL", layout.start_x + 2.0f * layout.phase_spacing, gate_y + layout.gate_source_spacing);
 
     // 4. Gate Resistors
-    float rg_y = start_y + 550;
-    add_comp("elec_passive", "resistor", "RgAH", start_x + 60, rg_y);
-    add_comp("elec_passive", "resistor", "RgAL", start_x + 60, rg_y + 40);
-    add_comp("elec_passive", "resistor", "RgBH", start_x + 210, rg_y);
-    add_comp("elec_passive", "resistor", "RgBL", start_x + 210, rg_y + 40);
-    add_comp("elec_passive", "resistor", "RgCH", start_x + 360, rg_y);
-    add_comp("elec_passive", "resistor", "RgCL", start_x + 360, rg_y + 40);
+    float rg_y = layout.start_y + layout.gate_resistor_offset;
+    add_comp("elec_passive", "resistor", "RgAH", layout.start_x + layout.gate_resistor_x_offset, rg_y);
+    add_comp("elec_passive", "resistor", "RgAL", layout.start_x + layout.gate_resistor_x_offset, rg_y + layout.gate_resistor_y_spacing);
+    add_comp("elec_passive", "resistor", "RgBH", layout.start_x + layout.phase_spacing + layout.gate_resistor_x_offset, rg_y);
+    add_comp("elec_passive", "resistor", "RgBL", layout.start_x + layout.phase_spacing + layout.gate_resistor_x_offset, rg_y + layout.gate_resistor_y_spacing);
+    add_comp("elec_passive", "resistor", "RgCH", layout.start_x + 2.0f * layout.phase_spacing + layout.gate_resistor_x_offset, rg_y);
+    add_comp("elec_passive", "resistor", "RgCL", layout.start_x + 2.0f * layout.phase_spacing + layout.gate_resistor_x_offset, rg_y + layout.gate_resistor_y_spacing);
 
     // 5. Motor Windings (Y-connected)
-    float load_y = start_y + 680;
-    add_comp("elec_passive", "resistor", "R_A", start_x + 30, load_y);
-    add_comp("elec_passive", "resistor", "R_B", start_x + 150, load_y);
-    add_comp("elec_passive", "resistor", "R_C", start_x + 270, load_y);
-
-    spdlog::info("[ESC_TEMPLATE] All components added, creating wires...");
+    float load_y = layout.start_y + layout.motor_winding_offset;
+    add_comp("elec_passive", "resistor", "R_A", layout.start_x + layout.motor_winding_x_offset, load_y);
+    add_comp("elec_passive", "resistor", "R_B", layout.start_x + layout.phase_spacing, load_y);
+    add_comp("elec_passive", "resistor", "R_C", layout.start_x + 2.0f * layout.phase_spacing - layout.motor_winding_x_offset, load_y);
 
     // Helper to add wire with direction detection
     auto add_wire_auto = [this](const char* from_node, const char* from_pin,
@@ -365,9 +387,6 @@ void CircuitEditor::add_esc_template() {
     add_wire_auto("R_A", "2", "R_B", "2");  // Winding A to Winding B
     add_wire_auto("R_B", "2", "R_C", "2");  // Winding B to Winding C
 
-    spdlog::info("[ESC_TEMPLATE] ESC template added successfully! {} components, {} wires",
-                 m_nodes.size() - start_node_count, m_wires.size());
-
     // Select the first MOSFET to show properties
     m_selected_node_index = static_cast<int>(start_node_count);  // Select AH
     m_selected_node_id = "AH";
@@ -378,7 +397,6 @@ void CircuitEditor::remove_node(int index) {
     if (!m_orchestrator || index < 0 || index >= static_cast<int>(m_nodes.size())) return;
 
     std::string removed_id = m_nodes[index].id;
-    spdlog::info("Removing circuit component: {}", removed_id);
 
     m_orchestrator->remove_component(removed_id);
 
@@ -456,95 +474,54 @@ bool CircuitEditor::add_wire(const std::string& from_node, const std::string& fr
 
             if (src_port && tgt_port) {
                 m_orchestrator->connect(src_port, tgt_port, wire.uid);
-                spdlog::info("Connected ports: {}[{}] -> {}[{}] (UID: {})", src_node, src_pin, tgt_node, tgt_pin, wire.uid);
             } else {
                 spdlog::warn("Port not found for wire connection: {}[{}] -> {}[{}]", src_node, src_pin, tgt_node, tgt_pin);
             }
         }
     }
 
-    spdlog::info("Added wire: {}[{}] -> {}[{}]", src_node, src_pin, tgt_node, tgt_pin);
     return true;
 }
 
 void CircuitEditor::remove_wire(int index) {
-    spdlog::info("[REMOVE_WIRE] ENTER: index={}, m_wires.size()={}", index, m_wires.size());
-
     if (index < 0 || index >= static_cast<int>(m_wires.size())) {
-        spdlog::warn("[REMOVE_WIRE] Index out of range: {} (size={})", index, m_wires.size());
         return;
     }
 
     const auto& wire = m_wires[index];
-    spdlog::info("[REMOVE_WIRE] Wire: {}[{}] -> {}[{}]",
-                 wire.from_node, wire.from_pin_name,
-                 wire.to_node, wire.to_pin_name);
 
     // Remove the actual Port Connection from orchestrator
     if (m_orchestrator) {
-        spdlog::info("[REMOVE_WIRE] Orchestrator OK");
         Component* src_comp = m_orchestrator->registry().get(wire.from_node);
         Component* tgt_comp = m_orchestrator->registry().get(wire.to_node);
 
         if (src_comp && tgt_comp) {
-            spdlog::info("[REMOVE_WIRE] Components OK: src='{}' tgt='{}'", src_comp->id(), tgt_comp->id());
             auto src_ports = src_comp->get_ports();
             auto tgt_ports = tgt_comp->get_ports();
-            spdlog::info("[REMOVE_WIRE] src_ports={}, tgt_ports={}", src_ports.size(), tgt_ports.size());
 
             Port* src_port = nullptr;
             Port* tgt_port = nullptr;
 
             for (auto* p : src_ports) {
-                spdlog::info("[REMOVE_WIRE]   src port='{}'", p->name());
                 if (p->name() == wire.from_pin_name) { src_port = p; break; }
             }
             for (auto* p : tgt_ports) {
-                spdlog::info("[REMOVE_WIRE]   tgt port='{}'", p->name());
                 if (p->name() == wire.to_pin_name) { tgt_port = p; break; }
             }
 
             if (src_port && tgt_port) {
-                spdlog::info("[REMOVE_WIRE] Both ports found: src='{}' tgt='{}'", src_port->name(), tgt_port->name());
-                spdlog::info("[REMOVE_WIRE] src_conns={}, tgt_conns={}",
-                             src_port->connections().size(), tgt_port->connections().size());
-
-                bool disconnected = false;
                 for (auto* conn : src_port->connections()) {
-                    spdlog::info("[REMOVE_WIRE]   conn: src='{}' tgt='{}'",
-                                 conn->source ? conn->source->name() : "null",
-                                 conn->target ? conn->target->name() : "null");
                     if ((conn->source == src_port && conn->target == tgt_port) ||
                         (conn->source == tgt_port && conn->target == src_port)) {
-                        spdlog::info("[REMOVE_WIRE]   MATCH! Disconnecting...");
                         m_orchestrator->disconnect(conn);
-                        disconnected = true;
-                        spdlog::info("[REMOVE_WIRE] Disconnected ports: {}[{}] -> {}[{}]",
-                                     wire.from_node, wire.from_pin_name,
-                                     wire.to_node, wire.to_pin_name);
                         break;
                     }
                 }
-                if (!disconnected) {
-                    spdlog::warn("[REMOVE_WIRE] No matching connection found!");
-                }
-            } else {
-                spdlog::warn("[REMOVE_WIRE] Port not found: src={}, tgt={}",
-                             src_port ? "found" : "MISSING",
-                             tgt_port ? "found" : "MISSING");
             }
-        } else {
-            spdlog::warn("[REMOVE_WIRE] Component not found: src={}, tgt={}",
-                         src_comp ? "found" : "MISSING",
-                         tgt_comp ? "found" : "MISSING");
         }
-    } else {
-        spdlog::warn("[REMOVE_WIRE] No orchestrator!");
     }
 
-    spdlog::info("[REMOVE_WIRE] Erasing wire from m_wires...");
     m_wires.erase(m_wires.begin() + index);
-    spdlog::info("[REMOVE_WIRE] After erase, m_wires.size()={}", m_wires.size());
 }
 
 // ============================================================================
@@ -585,6 +562,48 @@ const CircuitEditor::PinInfo* CircuitEditor::get_pin_at_position(const CircuitNo
     // Only use REAL ports from the component - no fallback
     if (node.pins.empty()) return nullptr;
 
+    // If a schematic symbol exists for this type (or is currently being edited), use its pin anchors.
+    static SchematicSymbolLibrary sym_lib;
+    SchematicSymbol sym;
+    bool has_sym = sym_lib.load_for_type(node.type, sym);
+    if (m_symbol_editor_open && m_symbol_edit_inplace && m_symbol_loaded && m_symbol_state && m_symbol_edit_type == node.type) {
+        sym = m_symbol_state->sym;
+        has_sym = true;
+    }
+
+    if (has_sym) {
+        // Compute node height like render does.
+        int input_count = 0, output_count = 0;
+        for (const auto& pin : node.pins) {
+            if (pin.is_input) input_count++;
+            else output_count++;
+        }
+        if (input_count == 0) input_count = 1;
+        if (output_count == 0) output_count = 1;
+        int max_side = std::max(input_count, output_count);
+        float node_height = label_height + static_cast<float>(max_side) * pin_spacing + 10.0f;
+
+        auto sym_to_local = [&](float sx, float sy) -> ImVec2 {
+            const float pad_x = -10.0f;
+            const float pad_y = -10.0f;
+            const float avail_w = node_width - 2.0f * pad_x;
+            const float avail_h = node_height - 2.0f * pad_y;
+            const float scale = std::min(avail_w / std::max(1.0f, sym.width), avail_h / std::max(1.0f, sym.height));
+            const float ox = node.position[0] + pad_x + (avail_w - sym.width * scale) * 0.5f;
+            const float oy = node.position[1] + pad_y + (avail_h - sym.height * scale) * 0.5f;
+            return ImVec2(ox + sx * scale, oy + sy * scale);
+        };
+
+        for (const auto& pin : node.pins) {
+            auto it = sym.pins.find(pin.name);
+            if (it == sym.pins.end()) continue;
+            ImVec2 p = sym_to_local(it->second.first, it->second.second);
+            float dist = std::sqrt((x - p.x) * (x - p.x) + (y - p.y) * (y - p.y));
+            if (dist < hit_radius) return &pin;
+        }
+        return nullptr;
+    }
+
     int input_idx = 0;
     for (const auto& pin : node.pins) {
         if (!pin.is_input) continue;
@@ -612,6 +631,42 @@ ImVec2 CircuitEditor::get_pin_canvas_pos(const CircuitNode& node, const std::str
     const float pin_spacing = 18.0f;
     const float label_height = 28.0f;
     const float node_width = 100.0f;
+
+    // Symbol anchor mapping if present.
+    static SchematicSymbolLibrary sym_lib;
+    SchematicSymbol sym;
+    bool has_sym = sym_lib.load_for_type(node.type, sym);
+    if (m_symbol_editor_open && m_symbol_edit_inplace && m_symbol_loaded && m_symbol_state && m_symbol_edit_type == node.type) {
+        sym = m_symbol_state->sym;
+        has_sym = true;
+    }
+
+    if (has_sym) {
+        // Compute node height like render does.
+        int input_count = 0, output_count = 0;
+        for (const auto& pin : node.pins) {
+            if (pin.is_input) input_count++;
+            else output_count++;
+        }
+        if (input_count == 0) input_count = 1;
+        if (output_count == 0) output_count = 1;
+        int max_side = std::max(input_count, output_count);
+        float node_height = label_height + static_cast<float>(max_side) * pin_spacing + 10.0f;
+
+        auto itp = sym.pins.find(pin_name);
+        if (itp != sym.pins.end()) {
+            const float pad_x = -10.0f;
+            const float pad_y = -10.0f;
+            const float avail_w = node_width - 2.0f * pad_x;
+            const float avail_h = node_height - 2.0f * pad_y;
+            const float scale = std::min(avail_w / std::max(1.0f, sym.width), avail_h / std::max(1.0f, sym.height));
+            const float ox = node.position[0] + pad_x + (avail_w - sym.width * scale) * 0.5f;
+            const float oy = node.position[1] + pad_y + (avail_h - sym.height * scale) * 0.5f;
+            const float px = ox + itp->second.first * scale;
+            const float py = oy + itp->second.second * scale;
+            return ImVec2(canvas_pos.x + px, canvas_pos.y + py);
+        }
+    }
 
     // Find in actual pins only
     for (const auto& pin : node.pins) {
@@ -652,17 +707,8 @@ int CircuitEditor::get_wire_at_position(float x, float y, ImVec2 canvas_pos) {
         }
 
         if (!found_from || !found_to) {
-            spdlog::info("[WIRE_HIT] Wire #{}: from={} (found={}), to={} (found={})",
-                         i,
-                         found_from ? "OK" : "MISSING",
-                         found_from ? "OK" : "MISSING",
-                         found_to ? "OK" : "MISSING",
-                         found_to ? "OK" : "MISSING");
             continue;
         }
-
-        spdlog::info("[WIRE_HIT] Wire #{}: from=({:.0f},{:.0f}) to=({:.0f},{:.0f}), click=({:.0f},{:.0f})",
-                     i, from.x, from.y, to.x, to.y, x, y);
 
         // For Bezier curves, check multiple points along the curve
         float dx = to.x - from.x;
@@ -679,7 +725,6 @@ int CircuitEditor::get_wire_at_position(float x, float y, ImVec2 canvas_pos) {
 
             float dist = std::sqrt((x - px) * (x - px) + (y - py) * (y - py));
             if (dist < wire_hit_margin) {
-                spdlog::info("[WIRE_HIT] Wire #{} HIT at t={:.2f}, dist={:.1f}", i, t, dist);
                 return static_cast<int>(i);
             }
         }
@@ -708,58 +753,73 @@ void CircuitEditor::render(SimulationOrchestrator& orchestrator) {
     // Sync selection from orchestrator
     sync_selection_from_orchestrator();
 
-    ImGui::Begin("Circuit Editor");
+    // No Begin - we're inside a tab
 
-    // Menu bar
-    if (ImGui::BeginMenuBar()) {
-        if (ImGui::BeginMenu("Edit")) {
-            if (ImGui::MenuItem("Delete Selected", "Del")) {
-                if (m_selected_wire_index >= 0) {
-                    remove_wire(m_selected_wire_index);
-                    m_selected_wire_index = -1;
-                } else if (m_selected_node_index >= 0) {
-                    remove_node(m_selected_node_index);
-                }
-            }
-            if (ImGui::MenuItem("Clear All")) {
-                // Remove all Port Connections
-                for (const auto& wire : m_wires) {
-                    Component* src_comp = m_orchestrator->registry().get(wire.from_node);
-                    Component* tgt_comp = m_orchestrator->registry().get(wire.to_node);
-                    if (src_comp && tgt_comp) {
-                        auto src_ports = src_comp->get_ports();
-                        auto tgt_ports = tgt_comp->get_ports();
-                        for (auto* sp : src_ports) {
-                            for (auto* conn : sp->connections()) {
-                                for (auto* tp : tgt_ports) {
-                                    if (conn->source == tp || conn->target == tp) {
-                                        m_orchestrator->disconnect(conn);
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                for (int i = static_cast<int>(m_nodes.size()) - 1; i >= 0; --i) {
-                    m_orchestrator->remove_component(m_nodes[i].id);
-                }
-                m_nodes.clear();
-                m_wires.clear();
-                m_selected_node_index = -1;
-                m_selected_wire_index = -1;
-                m_selected_node_id.clear();
-                m_orchestrator->set_selected_component("");
-                spdlog::info("Circuit cleared");
-            }
-            ImGui::EndMenu();
+    // Toolbar buttons (instead of menu bar)
+    if (ImGui::Button("Clear All")) {
+        // Remove all components and wires
+        for (int i = static_cast<int>(m_nodes.size()) - 1; i >= 0; --i) {
+            m_orchestrator->remove_component(m_nodes[i].id);
         }
-        if (ImGui::BeginMenu("View")) {
-            ImGui::MenuItem("Component List", nullptr, &m_show_component_list);
-            ImGui::MenuItem("Properties", nullptr, &m_show_properties);
-            ImGui::EndMenu();
+        m_nodes.clear();
+        m_wires.clear();
+        m_selected_node_index = -1;
+        m_selected_wire_index = -1;
+        m_selected_node_id.clear();
+        m_orchestrator->set_selected_component("");
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Delete Selected")) {
+        if (m_selected_wire_index >= 0) {
+            remove_wire(m_selected_wire_index);
+            m_selected_wire_index = -1;
+        } else if (m_selected_node_index >= 0) {
+            remove_node(m_selected_node_index);
         }
-        ImGui::EndMenuBar();
+    }
+    ImGui::SameLine();
+    if (m_selected_node_index >= 0 && m_selected_node_index < (int)m_nodes.size()) {
+        if (ImGui::Button("Edit Symbol")) {
+            m_symbol_editor_open = !m_symbol_editor_open;
+            if (m_symbol_editor_open) m_symbol_loaded = false;
+        }
+        ImGui::SameLine();
+        ImGui::Checkbox("In-Place", &m_symbol_edit_inplace);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Edit directly on the component container");
+    } else {
+        ImGui::BeginDisabled();
+        ImGui::Button("Edit Symbol");
+        ImGui::SameLine();
+        ImGui::Checkbox("In-Place", &m_symbol_edit_inplace);
+        ImGui::EndDisabled();
+    }
+    ImGui::SameLine();
+    ImGui::Checkbox("Components", &m_show_component_list);
+    ImGui::SameLine();
+    ImGui::Checkbox("Properties", &m_show_properties);
+
+    ImGui::Separator();
+
+    // In-place save (per selected type)
+    if (m_symbol_editor_open && m_symbol_edit_inplace && m_symbol_dirty && m_symbol_state && !m_symbol_edit_type.empty()) {
+        ImGui::TextDisabled("Symbol modified (%s).", m_symbol_edit_type.c_str());
+        ImGui::SameLine();
+        if (ImGui::Checkbox("Container", &m_symbol_state->sym.container.enabled)) {
+            m_symbol_dirty = true;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Save Symbol")) {
+            namespace fs = std::filesystem;
+            std::error_code ec;
+            fs::create_directories(SchematicSymbolLibrary::user_dir(), ec);
+            const fs::path outp = fs::path(SchematicSymbolLibrary::user_dir()) / (m_symbol_edit_type + ".json");
+            std::ofstream out(outp.string());
+            if (out.is_open()) {
+                out << symbol_to_json(m_symbol_state->sym).dump(2);
+                m_symbol_dirty = false;
+            }
+        }
+        ImGui::Separator();
     }
 
     // Layout
@@ -771,7 +831,9 @@ void CircuitEditor::render(SimulationOrchestrator& orchestrator) {
     }
 
     ImGui::BeginChild("CircuitCanvas", ImVec2(m_show_properties ? -200 : 0, 0), true);
-    render_circuit_canvas();
+    // In-place mode edits directly in the circuit canvas. Full-canvas symbol editor is available when In-Place is off.
+    if (m_symbol_editor_open && !m_symbol_edit_inplace) render_symbol_editor();
+    else render_circuit_canvas();
     ImGui::EndChild();
 
     if (m_show_properties) {
@@ -780,8 +842,6 @@ void CircuitEditor::render(SimulationOrchestrator& orchestrator) {
         render_properties_panel();
         ImGui::EndChild();
     }
-
-    ImGui::End();
 }
 
 // ============================================================================
@@ -853,6 +913,10 @@ void CircuitEditor::render_component_palette() {
     add_btn("PI Ctrl", "pi_controller");
 
     ImGui::Spacing();
+    ImGui::TextDisabled("Instruments");
+    add_btn("Oscilloscope", "oscilloscope");
+
+    ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
     ImGui::TextDisabled("Templates");
@@ -888,12 +952,6 @@ void CircuitEditor::render_circuit_canvas() {
             m_selected_wire_index = wire_idx;
             m_wire_context_menu_pending = true;
             m_wire_context_menu_pos = ImVec2(mouse_pos.x, mouse_pos.y);
-            spdlog::info("[WIRE] Right-clicked wire #{}: {}[{}] -> {}[{}]",
-                         wire_idx,
-                         m_wires[wire_idx].from_node.c_str(),
-                         m_wires[wire_idx].from_pin_name.c_str(),
-                         m_wires[wire_idx].to_node.c_str(),
-                         m_wires[wire_idx].to_pin_name.c_str());
         } else {
             m_wire_context_menu_pending = false;
         }
@@ -918,6 +976,13 @@ void CircuitEditor::render_circuit_canvas() {
             m_drag_offset[0] = rel_x - m_nodes[clicked].position[0];
             m_drag_offset[1] = rel_y - m_nodes[clicked].position[1];
             sync_selection_to_orchestrator();
+
+            // Double-click: open oscilloscope tab
+            if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                if (m_nodes[clicked].type == "oscilloscope") {
+                    m_oscilloscope_open_id = m_nodes[clicked].id;
+                }
+            }
         } else {
             // Check pin click
             bool pin_clicked = false;
@@ -1090,6 +1155,7 @@ void CircuitEditor::render_circuit_canvas() {
     }
 
     // Nodes
+    static SchematicSymbolLibrary sym_lib;
     const float node_width = 100.0f;
     const float pin_spacing = 18.0f;
     const float pin_radius = 5.0f;
@@ -1111,17 +1177,186 @@ void CircuitEditor::render_circuit_canvas() {
         ImVec2 node_pos(canvas_pos.x + node.position[0], canvas_pos.y + node.position[1]);
 
         bool is_selected = (static_cast<int>(i) == m_selected_node_index);
-        ImU32 bg_color = is_selected ?
-            ImGui::GetColorU32(ImVec4(0.3f, 0.5f, 0.7f, 0.8f)) :
-            ImGui::GetColorU32(ImVec4(0.2f, 0.2f, 0.2f, 0.9f));
+        // Schematic symbol (may define whether the outer container is shown).
+        SchematicSymbol sym;
+        const bool has_sym = sym_lib.load_for_type(node.type, sym);
 
-        draw_list->AddRectFilled(node_pos, ImVec2(node_pos.x + node_width, node_pos.y + node_height), bg_color, 4.0f);
-        draw_list->AddRect(node_pos, ImVec2(node_pos.x + node_width, node_pos.y + node_height),
-                          is_selected ? IM_COL32(100, 200, 255, 255) : IM_COL32(255, 255, 255, 255), 4.0f, 0, is_selected ? 2.5f : 1.5f);
+        const bool edit_active = m_symbol_editor_open && m_symbol_edit_inplace && (static_cast<int>(i) == m_selected_node_index);
+        if (edit_active) {
+            // When editing, use the live edited symbol as the source of truth for container visibility.
+            if (m_symbol_state && m_symbol_loaded && m_symbol_edit_type == node.type) {
+                sym = m_symbol_state->sym;
+            }
+        }
+
+        const bool container_enabled = edit_active ? sym.container.enabled : (has_sym ? sym.container.enabled : true);
+        const float container_radius = edit_active ? sym.container.corner_radius : (has_sym ? sym.container.corner_radius : 4.0f);
+
+        if (container_enabled) {
+            ImU32 bg_color = is_selected ?
+                ImGui::GetColorU32(ImVec4(0.3f, 0.5f, 0.7f, 0.8f)) :
+                ImGui::GetColorU32(ImVec4(0.2f, 0.2f, 0.2f, 0.9f));
+
+            draw_list->AddRectFilled(node_pos, ImVec2(node_pos.x + node_width, node_pos.y + node_height), bg_color, container_radius);
+            draw_list->AddRect(node_pos, ImVec2(node_pos.x + node_width, node_pos.y + node_height),
+                              is_selected ? IM_COL32(100, 200, 255, 255) : IM_COL32(255, 255, 255, 255),
+                              container_radius, 0, is_selected ? 2.5f : 1.5f);
+        } else if (is_selected) {
+            // Frameless, but keep a subtle selection outline so it stays usable.
+            draw_list->AddRect(node_pos, ImVec2(node_pos.x + node_width, node_pos.y + node_height),
+                              IM_COL32(100, 200, 255, 160), 3.0f, 0, 2.0f);
+        }
 
         // Label
         draw_list->AddText(ImVec2(node_pos.x + 5, node_pos.y + 5),
                           IM_COL32(255, 255, 255, 255), node.type.c_str());
+
+        // Schematic symbol render (if available). If missing, keep the legacy pin layout.
+        auto sym_to_canvas = [&](float sx, float sy) -> ImVec2 {
+            // Map symbol coordinates into an area slightly larger than the node container (outward padding),
+            // so drawings can extend beyond the blue container.
+            const float pad_x = -10.0f;
+            const float pad_y = -10.0f;
+            const float avail_w = node_width - 2.0f * pad_x;
+            const float avail_h = node_height - 2.0f * pad_y;
+            const float scale = std::min(avail_w / std::max(1.0f, sym.width), avail_h / std::max(1.0f, sym.height));
+            const float ox = node_pos.x + pad_x + (avail_w - sym.width * scale) * 0.5f;
+            const float oy = node_pos.y + pad_y + (avail_h - sym.height * scale) * 0.5f;
+            return ImVec2(ox + sx * scale, oy + sy * scale);
+        };
+
+        if (has_sym) {
+            for (const auto& p : sym.body) {
+                ImVec2 a = sym_to_canvas(p.x1, p.y1);
+                ImVec2 b = sym_to_canvas(p.x2, p.y2);
+                if (p.type == SchematicSymbolPrimitive::Type::Rect) {
+                    draw_list->AddRect(a, b, IM_COL32(230, 230, 230, 220), 2.0f, 0, p.thickness);
+                } else {
+                    draw_list->AddLine(a, b, IM_COL32(230, 230, 230, 220), p.thickness);
+                }
+            }
+        }
+
+        // In-place symbol edit: allow dragging pins/endpoints directly on the component container.
+        // This edits the per-type symbol (saved to assets/symbols_user/<type>.json from the Symbol Editor).
+        // edit_active already computed above
+        if (edit_active) {
+            if (!m_symbol_state) m_symbol_state = std::make_unique<SymbolEditState>();
+            if (m_symbol_edit_type != node.type) {
+                m_symbol_edit_type = node.type;
+                m_symbol_loaded = false;
+                m_symbol_dirty = false;
+                *m_symbol_state = SymbolEditState{};
+            }
+            if (!m_symbol_loaded) {
+                if (has_sym) m_symbol_state->sym = sym;
+                else {
+                    m_symbol_state->sym = SchematicSymbol{};
+                    m_symbol_state->sym.width = 100;
+                    m_symbol_state->sym.height = 70;
+                    m_symbol_state->sym.body.push_back({SchematicSymbolPrimitive::Type::Rect, 15, 15, 85, 55, 2.0f});
+                    int in_i = 0, out_i = 0;
+                    for (const auto& p : node.pins) {
+                        if (p.is_input) { m_symbol_state->sym.pins[p.name] = {10.0f, 22.0f + in_i * 12.0f}; in_i++; }
+                        else { m_symbol_state->sym.pins[p.name] = {90.0f, 22.0f + out_i * 12.0f}; out_i++; }
+                    }
+                }
+                m_symbol_loaded = true;
+            }
+            // In edit mode we always render from the live edited symbol.
+            sym = m_symbol_state->sym;
+
+            // sync missing pins
+            for (const auto& p : node.pins) {
+                if (m_symbol_state->sym.pins.find(p.name) == m_symbol_state->sym.pins.end()) {
+                    m_symbol_state->sym.pins[p.name] = {m_symbol_state->sym.width * 0.5f, m_symbol_state->sym.height * 0.5f};
+                    m_symbol_dirty = true;
+                }
+            }
+
+            auto from_canvas = [&](ImVec2 cp, float& sx, float& sy) {
+                // Inverse of sym_to_canvas above (same layout constants).
+                const float pad_x = -10.0f;
+                const float pad_y = -10.0f;
+                const float avail_w = node_width - 2.0f * pad_x;
+                const float avail_h = node_height - 2.0f * pad_y;
+                const float scale = std::min(avail_w / std::max(1.0f, m_symbol_state->sym.width), avail_h / std::max(1.0f, m_symbol_state->sym.height));
+                const float ox = node_pos.x + pad_x + (avail_w - m_symbol_state->sym.width * scale) * 0.5f;
+                const float oy = node_pos.y + pad_y + (avail_h - m_symbol_state->sym.height * scale) * 0.5f;
+                sx = (cp.x - ox) / scale;
+                sy = (cp.y - oy) / scale;
+                // Allow editing slightly outside the nominal symbol bounds.
+                const float margin = 25.0f;
+                sx = std::clamp(sx, -margin, m_symbol_state->sym.width + margin);
+                sy = std::clamp(sy, -margin, m_symbol_state->sym.height + margin);
+            };
+
+            auto dist2 = [](ImVec2 a, ImVec2 b) {
+                float dx = a.x - b.x, dy = a.y - b.y;
+                return dx * dx + dy * dy;
+            };
+
+            ImVec2 mp = ImGui::GetMousePos();
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                m_symbol_state->drag_pin.clear();
+                m_symbol_state->drag_prim = -1;
+                m_symbol_state->drag_point = -1;
+
+                // pin hit
+                const float pin_r = 9.0f;
+                for (const auto& [name, pt] : m_symbol_state->sym.pins) {
+                    ImVec2 p = sym_to_canvas(pt.first, pt.second);
+                    if (dist2(p, mp) <= pin_r * pin_r) {
+                        m_symbol_state->drag_pin = name;
+                        break;
+                    }
+                }
+                // endpoint hit
+                if (m_symbol_state->drag_pin.empty()) {
+                    const float ep_r = 8.0f;
+                    for (int pi = 0; pi < (int)m_symbol_state->sym.body.size(); ++pi) {
+                        const auto& pr = m_symbol_state->sym.body[pi];
+                        ImVec2 p0 = sym_to_canvas(pr.x1, pr.y1);
+                        ImVec2 p1 = sym_to_canvas(pr.x2, pr.y2);
+                        if (dist2(p0, mp) <= ep_r * ep_r) { m_symbol_state->selected_prim = pi; m_symbol_state->drag_prim = pi; m_symbol_state->drag_point = 0; break; }
+                        if (dist2(p1, mp) <= ep_r * ep_r) { m_symbol_state->selected_prim = pi; m_symbol_state->drag_prim = pi; m_symbol_state->drag_point = 1; break; }
+                    }
+                }
+            }
+
+            if (ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+                float sx, sy;
+                from_canvas(mp, sx, sy);
+                if (!m_symbol_state->drag_pin.empty()) {
+                    m_symbol_state->sym.pins[m_symbol_state->drag_pin] = {sx, sy};
+                    m_symbol_dirty = true;
+                } else if (m_symbol_state->drag_prim >= 0 && m_symbol_state->drag_prim < (int)m_symbol_state->sym.body.size()) {
+                    auto& pr = m_symbol_state->sym.body[m_symbol_state->drag_prim];
+                    if (m_symbol_state->drag_point == 0) { pr.x1 = sx; pr.y1 = sy; }
+                    else { pr.x2 = sx; pr.y2 = sy; }
+                    m_symbol_dirty = true;
+                }
+            }
+            if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+                m_symbol_state->drag_pin.clear();
+                m_symbol_state->drag_prim = -1;
+                m_symbol_state->drag_point = -1;
+            }
+
+            // overlay: highlight pins and endpoints when editing
+            for (const auto& [name, pt] : m_symbol_state->sym.pins) {
+                ImVec2 p = sym_to_canvas(pt.first, pt.second);
+                draw_list->AddCircle(p, 8.0f, IM_COL32(255, 255, 255, 90), 12, 1.5f);
+            }
+            for (int pi = 0; pi < (int)m_symbol_state->sym.body.size(); ++pi) {
+                const auto& pr = m_symbol_state->sym.body[pi];
+                ImVec2 p0 = sym_to_canvas(pr.x1, pr.y1);
+                ImVec2 p1 = sym_to_canvas(pr.x2, pr.y2);
+                ImU32 col = (pi == m_symbol_state->selected_prim) ? IM_COL32(120, 220, 255, 200) : IM_COL32(255, 255, 255, 90);
+                draw_list->AddCircleFilled(p0, 3.5f, col);
+                draw_list->AddCircleFilled(p1, 3.5f, col);
+            }
+        }
 
         // Draw input pins (left side)
         int input_idx = 0;
@@ -1130,6 +1365,14 @@ void CircuitEditor::render_circuit_canvas() {
 
             float pin_x = node_pos.x;
             float pin_y = node_pos.y + label_height + static_cast<float>(input_idx) * pin_spacing;
+            if (has_sym) {
+                auto it = sym.pins.find(pin.name);
+                if (it != sym.pins.end()) {
+                    ImVec2 ppos = sym_to_canvas(it->second.first, it->second.second);
+                    pin_x = ppos.x;
+                    pin_y = ppos.y;
+                }
+            }
 
             bool is_hovered_pin = false;
             ImVec2 mp = ImGui::GetMousePos();
@@ -1158,6 +1401,14 @@ void CircuitEditor::render_circuit_canvas() {
 
             float pin_x = node_pos.x + node_width;
             float pin_y = node_pos.y + label_height + static_cast<float>(output_idx) * pin_spacing;
+            if (has_sym) {
+                auto it = sym.pins.find(pin.name);
+                if (it != sym.pins.end()) {
+                    ImVec2 ppos = sym_to_canvas(it->second.first, it->second.second);
+                    pin_x = ppos.x;
+                    pin_y = ppos.y;
+                }
+            }
 
             bool is_hovered_pin = false;
             ImVec2 mp = ImGui::GetMousePos();
@@ -1199,12 +1450,6 @@ void CircuitEditor::render_circuit_canvas() {
         if (m_selected_wire_index >= 0 && m_selected_wire_index < static_cast<int>(m_wires.size())) {
             const auto& wire = m_wires[m_selected_wire_index];
 
-            spdlog::info("[WIRE_POPUP] Showing popup for wire #{}: {}[{}] -> {}[{}], UID='{}'",
-                         m_selected_wire_index,
-                         wire.from_node.c_str(), wire.from_pin_name.c_str(),
-                         wire.to_node.c_str(), wire.to_pin_name.c_str(),
-                         wire.uid.c_str());
-
             ImGui::Text("Wire Information");
             ImGui::Separator();
 
@@ -1242,84 +1487,134 @@ void CircuitEditor::render_circuit_canvas() {
                         if (p->name() == wire.to_pin_name) { tgt_port = p; break; }
                     }
 
-                    // Show voltages
-                    float src_voltage = 0.0f, tgt_voltage = 0.0f;
-                    if (src_port) {
-                        if (const float* f = src_port->get_value<float>()) {
-                            src_voltage = *f;
+                    auto port_voltage = [](Component* comp, Port* port) {
+                        if (!port) return 0.0f;
+                        float voltage = 0.0f;
+                        if (comp && comp->category() == "mcu" &&
+                            comp->get_mcu_pin_output_voltage(port->name(), voltage)) {
+                            return voltage;
                         }
-                    }
-                    if (tgt_port) {
-                        if (const float* f = tgt_port->get_value<float>()) {
-                            tgt_voltage = *f;
+                        if (const float* f = port->get_value<float>()) {
+                            return *f;
                         }
-                    }
+                        if (const bool* b = port->get_value<bool>()) {
+                            return *b ? 5.0f : 0.0f;
+                        }
+                        return 0.0f;
+                    };
+
+                    float src_voltage = port_voltage(src_comp, src_port);
+                    float tgt_voltage = port_voltage(tgt_comp, tgt_port);
 
                     ImGui::Text("Voltage: %.2f V -> %.2f V", src_voltage, tgt_voltage);
 
-                    // Debug log
-                    spdlog::info("[WIRE_CONTEXT] Wire: {}[{}] -> {}[{}], V: {:.2f}V -> {:.2f}V",
-                                 wire.from_node, wire.from_pin_name, wire.to_node, wire.to_pin_name,
-                                 src_voltage, tgt_voltage);
-
-                    // Get current from circuit pins if available
-                    // Try source component first, then target component
+                    // Get current from the terminal connected to this wire.
+                    // Prefer the target terminal so a shared supply/ground node
+                    // does not show total source current on every branch.
                     float current_a = 0.0f;
                     bool current_found = false;
+                    std::string current_source_label;
 
-                    #define GET_CURRENT(AdapterType, comp_ptr, pin_name) \
+                    auto get_actuator_current = [this](Component* comp, std::string_view pin_name, float& current) {
+                        return m_orchestrator &&
+                               comp &&
+                               comp->category() == "actuator" &&
+                               m_orchestrator->get_actuator_terminal_current(comp->id(), pin_name, current);
+                    };
+
+                    #define GET_CURRENT(AdapterType, comp_ptr, pin_name, out_current, out_found) \
                         if (auto* adapted = dynamic_cast<AdapterType*>(comp_ptr)) { \
                             auto pins = adapted->circuit_component()->get_pins(); \
                             for (auto* pin : pins) { \
                                 if (pin && pin->id == pin_name) { \
-                                    current_a = pin->current; \
-                                    current_found = true; \
+                                    out_current = pin->current; \
+                                    out_found = true; \
                                     break; \
                                 } \
                             } \
                         }
 
-                    // Try to get current from source component
-                    std::string_view src_cat = src_comp->category();
-                    std::string_view src_ctype = src_comp->component_type();
+                    auto get_component_pin_current = [&](Component* comp, std::string_view pin_name, float& current) {
+                        bool found = false;
+                        if (!comp) return false;
 
-                    if (src_cat == "passive" || src_cat == "semiconductor" || src_cat == "power") {
-                        if (src_ctype == "resistor") { GET_CURRENT(ResistorComponent, src_comp, wire.from_pin_name); }
-                        else if (src_ctype == "capacitor") { GET_CURRENT(CapacitorComponent, src_comp, wire.from_pin_name); }
-                        else if (src_ctype == "inductor") { GET_CURRENT(InductorComponent, src_comp, wire.from_pin_name); }
-                        else if (src_ctype == "diode") { GET_CURRENT(DiodeComponent, src_comp, wire.from_pin_name); }
-                        else if (src_ctype == "led") { GET_CURRENT(LEDComponent, src_comp, wire.from_pin_name); }
-                        else if (src_ctype == "zener_diode") { GET_CURRENT(ZenerDiodeComponent, src_comp, wire.from_pin_name); }
-                        else if (src_ctype == "bjt_npn" || src_ctype == "bjt_pnp") { GET_CURRENT(BJTComponent, src_comp, wire.from_pin_name); }
-                        else if (src_ctype == "mosfet_n" || src_ctype == "mosfet_p") { GET_CURRENT(MOSFETComponent, src_comp, wire.from_pin_name); }
-                        else if (src_ctype == "dc_voltage") { GET_CURRENT(DCVoltageComponent, src_comp, wire.from_pin_name); }
-                        else if (src_ctype == "ground") { GET_CURRENT(GroundComponent, src_comp, wire.from_pin_name); }
-                    }
+                        if (get_actuator_current(comp, pin_name, current)) {
+                            return true;
+                        }
 
-                    // If not found in source, try target component
-                    if (!current_found && tgt_comp) {
-                        std::string_view tgt_cat = tgt_comp->category();
-                        std::string_view tgt_ctype = tgt_comp->component_type();
+                        std::string_view cat = comp->category();
+                        std::string_view ctype = comp->component_type();
 
-                        if (tgt_cat == "passive" || tgt_cat == "semiconductor" || tgt_cat == "power") {
-                            if (tgt_ctype == "resistor") { GET_CURRENT(ResistorComponent, tgt_comp, wire.to_pin_name); }
-                            else if (tgt_ctype == "capacitor") { GET_CURRENT(CapacitorComponent, tgt_comp, wire.to_pin_name); }
-                            else if (tgt_ctype == "inductor") { GET_CURRENT(InductorComponent, tgt_comp, wire.to_pin_name); }
-                            else if (tgt_ctype == "diode") { GET_CURRENT(DiodeComponent, tgt_comp, wire.to_pin_name); }
-                            else if (tgt_ctype == "led") { GET_CURRENT(LEDComponent, tgt_comp, wire.to_pin_name); }
-                            else if (tgt_ctype == "zener_diode") { GET_CURRENT(ZenerDiodeComponent, tgt_comp, wire.to_pin_name); }
-                            else if (tgt_ctype == "bjt_npn" || tgt_ctype == "bjt_pnp") { GET_CURRENT(BJTComponent, tgt_comp, wire.to_pin_name); }
-                            else if (tgt_ctype == "mosfet_n" || tgt_ctype == "mosfet_p") { GET_CURRENT(MOSFETComponent, tgt_comp, wire.to_pin_name); }
-                            else if (tgt_ctype == "dc_voltage") { GET_CURRENT(DCVoltageComponent, tgt_comp, wire.to_pin_name); }
-                            else if (tgt_ctype == "ground") { GET_CURRENT(GroundComponent, tgt_comp, wire.to_pin_name); }
+                        if (cat == "passive" || cat == "semiconductor" || cat == "power") {
+                            if (ctype == "resistor") { GET_CURRENT(ResistorComponent, comp, pin_name, current, found); }
+                            else if (ctype == "capacitor") { GET_CURRENT(CapacitorComponent, comp, pin_name, current, found); }
+                            else if (ctype == "inductor") { GET_CURRENT(InductorComponent, comp, pin_name, current, found); }
+                            else if (ctype == "diode") { GET_CURRENT(DiodeComponent, comp, pin_name, current, found); }
+                            else if (ctype == "led") { GET_CURRENT(LEDComponent, comp, pin_name, current, found); }
+                            else if (ctype == "zener_diode") { GET_CURRENT(ZenerDiodeComponent, comp, pin_name, current, found); }
+                            else if (ctype == "bjt_npn" || ctype == "bjt_pnp") { GET_CURRENT(BJTComponent, comp, pin_name, current, found); }
+                            else if (ctype == "mosfet_n" || ctype == "mosfet_p") { GET_CURRENT(MOSFETComponent, comp, pin_name, current, found); }
+                            else if (ctype == "dc_voltage") { GET_CURRENT(DCVoltageComponent, comp, pin_name, current, found); }
+                            else if (ctype == "ground") { GET_CURRENT(GroundComponent, comp, pin_name, current, found); }
+                            else if (ctype == "h_bridge") { GET_CURRENT(HBridgeComponent, comp, pin_name, current, found); }
+                            else if (ctype == "buck_converter") { GET_CURRENT(BuckConverterComponent, comp, pin_name, current, found); }
+                            else if (ctype == "boost_converter") { GET_CURRENT(BoostConverterComponent, comp, pin_name, current, found); }
+                            else if (ctype == "motor_driver") { GET_CURRENT(MotorDriverComponent, comp, pin_name, current, found); }
+                        }
+
+                        return found;
+                    };
+
+                    auto current_endpoint_priority = [](Component* comp) {
+                        if (!comp) return 0;
+
+                        std::string_view category = comp->category();
+                        std::string_view type = comp->component_type();
+
+                        if (category == "power") {
+                            if (type == "dc_voltage" || type == "ground") {
+                                return 1;
+                            }
+                            return 3;
+                        }
+
+                        if (category == "passive" || category == "semiconductor" || category == "electronic" || category == "optoelectronic") {
+                            return 3;
+                        }
+
+                        if (category == "actuator") {
+                            return 2;
+                        }
+
+                        return 0;
+                    };
+
+                    int src_priority = current_endpoint_priority(src_comp);
+                    int tgt_priority = current_endpoint_priority(tgt_comp);
+
+                    if (src_priority > tgt_priority) {
+                        current_found = get_component_pin_current(src_comp, wire.from_pin_name, current_a);
+                        if (!current_found) {
+                            current_found = get_component_pin_current(tgt_comp, wire.to_pin_name, current_a);
+                            if (current_found && tgt_comp) {
+                                current_source_label = std::string(tgt_comp->id()) + "." + wire.to_pin_name;
+                            }
+                        } else if (src_comp) {
+                            current_source_label = std::string(src_comp->id()) + "." + wire.from_pin_name;
+                        }
+                    } else {
+                        current_found = get_component_pin_current(tgt_comp, wire.to_pin_name, current_a);
+                        if (!current_found) {
+                            current_found = get_component_pin_current(src_comp, wire.from_pin_name, current_a);
+                            if (current_found && src_comp) {
+                                current_source_label = std::string(src_comp->id()) + "." + wire.from_pin_name;
+                            }
+                        } else if (tgt_comp) {
+                            current_source_label = std::string(tgt_comp->id()) + "." + wire.to_pin_name;
                         }
                     }
 
                     #undef GET_CURRENT
-
-                    // Debug log
-                    spdlog::info("[WIRE_CONTEXT] current_found={} current_a={}",
-                                 current_found, current_a);
 
                     // Format current
                     if (current_found) {
@@ -1333,9 +1628,12 @@ void CircuitEditor::render_circuit_canvas() {
                         } else {
                             current_str = std::to_string(current_a) + " A";
                         }
-                        ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.5f, 1.0f), "Current: %s", current_str.c_str());
+                        ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.5f, 1.0f), "Terminal Current: %s", current_str.c_str());
+                        if (!current_source_label.empty()) {
+                            ImGui::TextDisabled("Source: %s", current_source_label.c_str());
+                        }
                     } else {
-                        ImGui::TextDisabled("Current: N/A");
+                        ImGui::TextDisabled("Terminal Current: N/A");
                     }
                 }
             }
@@ -1345,11 +1643,9 @@ void CircuitEditor::render_circuit_canvas() {
 
             if (ImGui::Button("Delete", ImVec2(100, 0))) {
                 int idx = m_selected_wire_index;
-                spdlog::info("[WIRE] Delete button pressed! Index={}", idx);
                 remove_wire(idx);
                 m_selected_wire_index = -1;
                 ImGui::CloseCurrentPopup();
-                spdlog::info("[WIRE] After erase, m_wires.size()={}", m_wires.size());
             }
             ImGui::SameLine();
             if (ImGui::Button("Cancel", ImVec2(100, 0))) {
@@ -1367,6 +1663,276 @@ void CircuitEditor::render_circuit_canvas() {
 // Helper macros for safe type casting
 #define TRY_CAST(type) dynamic_cast<type*>(comp)
 
+static nlohmann::json symbol_to_json(const SchematicSymbol& sym) {
+    nlohmann::json j;
+    j["width"] = sym.width;
+    j["height"] = sym.height;
+    j["container"] = {
+        {"enabled", sym.container.enabled},
+        {"corner_radius", sym.container.corner_radius}
+    };
+    j["body"] = nlohmann::json::array();
+    for (const auto& p : sym.body) {
+        nlohmann::json pj;
+        pj["type"] = (p.type == SchematicSymbolPrimitive::Type::Rect) ? "rect" : "line";
+        pj["x1"] = p.x1; pj["y1"] = p.y1; pj["x2"] = p.x2; pj["y2"] = p.y2;
+        pj["thickness"] = p.thickness;
+        j["body"].push_back(pj);
+    }
+    nlohmann::json pins = nlohmann::json::object();
+    for (const auto& [name, pt] : sym.pins) {
+        pins[name] = nlohmann::json::array({pt.first, pt.second});
+    }
+    j["pins"] = pins;
+    return j;
+}
+
+void CircuitEditor::render_symbol_editor() {
+    if (m_selected_node_index < 0 || m_selected_node_index >= static_cast<int>(m_nodes.size())) return;
+    const auto& node = m_nodes[m_selected_node_index];
+    const std::string& type = node.type;
+
+    if (!m_symbol_state) m_symbol_state = std::make_unique<SymbolEditState>();
+
+    if (m_symbol_edit_type != type) {
+        m_symbol_edit_type = type;
+        m_symbol_loaded = false;
+        m_symbol_dirty = false;
+        *m_symbol_state = SymbolEditState{};
+    }
+
+    if (!m_symbol_loaded) {
+        SchematicSymbolLibrary lib;
+        SchematicSymbol sym;
+        if (lib.load_for_type(type, sym)) {
+            m_symbol_state->sym = sym;
+        } else {
+            m_symbol_state->sym = SchematicSymbol{};
+            m_symbol_state->sym.width = 100;
+            m_symbol_state->sym.height = 70;
+            m_symbol_state->sym.body.push_back({SchematicSymbolPrimitive::Type::Rect, 15, 15, 85, 55, 2.0f});
+            int in_i = 0, out_i = 0;
+            for (const auto& p : node.pins) {
+                if (p.is_input) {
+                    m_symbol_state->sym.pins[p.name] = {10.0f, 22.0f + in_i * 12.0f};
+                    in_i++;
+                } else {
+                    m_symbol_state->sym.pins[p.name] = {90.0f, 22.0f + out_i * 12.0f};
+                    out_i++;
+                }
+            }
+        }
+        m_symbol_loaded = true;
+    }
+
+    // Ensure pins exist for current ports (component schema may differ).
+    for (const auto& p : node.pins) {
+        if (m_symbol_state->sym.pins.find(p.name) == m_symbol_state->sym.pins.end()) {
+            m_symbol_state->sym.pins[p.name] = {m_symbol_state->sym.width * 0.5f, m_symbol_state->sym.height * 0.5f};
+            m_symbol_dirty = true;
+        }
+    }
+
+    ImGui::TextColored(ImVec4(0.7f, 0.9f, 1.0f, 1.0f), "Symbol Editor");
+    ImGui::SameLine();
+    ImGui::TextDisabled("(Type: %s)", type.c_str());
+    ImGui::SameLine();
+    if (ImGui::Button("Back to Circuit")) {
+        m_symbol_editor_open = false;
+        return;
+    }
+    ImGui::SameLine();
+    if (ImGui::Checkbox("Container", &m_symbol_state->sym.container.enabled)) {
+        m_symbol_dirty = true;
+    }
+
+    if (ImGui::Button("Add Line")) {
+        m_symbol_state->add_line_mode = true;
+        m_symbol_state->add_rect_mode = false;
+        m_symbol_state->add_has_first = false;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Add Rect")) {
+        m_symbol_state->add_rect_mode = true;
+        m_symbol_state->add_line_mode = false;
+        m_symbol_state->add_has_first = false;
+    }
+    ImGui::SameLine();
+    const bool can_delete = (m_symbol_state->selected_prim >= 0 && m_symbol_state->selected_prim < (int)m_symbol_state->sym.body.size());
+    if (!can_delete) ImGui::BeginDisabled();
+    if (ImGui::Button("Delete Shape")) {
+        m_symbol_state->sym.body.erase(m_symbol_state->sym.body.begin() + m_symbol_state->selected_prim);
+        m_symbol_state->selected_prim = -1;
+        m_symbol_dirty = true;
+    }
+    if (!can_delete) ImGui::EndDisabled();
+
+    ImGui::SameLine();
+    if (m_symbol_dirty) {
+        if (ImGui::Button("Save")) {
+            namespace fs = std::filesystem;
+            std::error_code ec;
+            fs::create_directories(SchematicSymbolLibrary::user_dir(), ec);
+            const fs::path outp = fs::path(SchematicSymbolLibrary::user_dir()) / (type + ".json");
+            std::ofstream out(outp.string());
+            if (out.is_open()) {
+                out << symbol_to_json(m_symbol_state->sym).dump(2);
+                m_symbol_dirty = false;
+            }
+        }
+    } else {
+        ImGui::BeginDisabled();
+        ImGui::Button("Saved");
+        ImGui::EndDisabled();
+    }
+
+    // Full available area under the toolbar becomes the drawing canvas.
+    ImVec2 canvas_size(0, 0);
+    ImGui::BeginChild("SymbolCanvas", canvas_size, true, ImGuiWindowFlags_NoScrollWithMouse);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImVec2 cpos = ImGui::GetCursorScreenPos();
+    ImVec2 avail = ImGui::GetContentRegionAvail();
+    ImGui::InvisibleButton("symbol_canvas_btn", avail, ImGuiButtonFlags_MouseButtonLeft);
+    const bool hovered = ImGui::IsItemHovered();
+    ImVec2 mp = ImGui::GetMousePos();
+    const float mx = mp.x - cpos.x;
+    const float my = mp.y - cpos.y;
+
+    auto to_canvas = [&](float sx, float sy) -> ImVec2 {
+        const float pad = 8.0f;
+        const float w = std::max(1.0f, avail.x - 2 * pad);
+        const float h = std::max(1.0f, avail.y - 2 * pad);
+        const float scale = std::min(w / std::max(1.0f, m_symbol_state->sym.width), h / std::max(1.0f, m_symbol_state->sym.height));
+        const float ox = cpos.x + pad + (w - m_symbol_state->sym.width * scale) * 0.5f;
+        const float oy = cpos.y + pad + (h - m_symbol_state->sym.height * scale) * 0.5f;
+        return ImVec2(ox + sx * scale, oy + sy * scale);
+    };
+    auto from_canvas = [&](float cx, float cy, float& sx, float& sy) {
+        const float pad = 8.0f;
+        const float w = std::max(1.0f, avail.x - 2 * pad);
+        const float h = std::max(1.0f, avail.y - 2 * pad);
+        const float scale = std::min(w / std::max(1.0f, m_symbol_state->sym.width), h / std::max(1.0f, m_symbol_state->sym.height));
+        const float ox = pad + (w - m_symbol_state->sym.width * scale) * 0.5f;
+        const float oy = pad + (h - m_symbol_state->sym.height * scale) * 0.5f;
+        sx = (cx - ox) / scale;
+        sy = (cy - oy) / scale;
+        sx = std::clamp(sx, 0.0f, m_symbol_state->sym.width);
+        sy = std::clamp(sy, 0.0f, m_symbol_state->sym.height);
+    };
+
+    // Frame
+    ImVec2 a0 = to_canvas(0, 0);
+    ImVec2 a1 = to_canvas(m_symbol_state->sym.width, m_symbol_state->sym.height);
+    dl->AddRect(a0, a1, IM_COL32(255, 255, 255, 60), 2.0f);
+
+    auto dist2 = [](ImVec2 a, ImVec2 b) {
+        const float dx = a.x - b.x;
+        const float dy = a.y - b.y;
+        return dx * dx + dy * dy;
+    };
+
+    if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        m_symbol_state->drag_pin.clear();
+        m_symbol_state->drag_prim = -1;
+        m_symbol_state->drag_point = -1;
+
+        if (m_symbol_state->add_line_mode || m_symbol_state->add_rect_mode) {
+            float sx, sy;
+            from_canvas(mx, my, sx, sy);
+            if (!m_symbol_state->add_has_first) {
+                m_symbol_state->add_has_first = true;
+                m_symbol_state->add_x0 = sx;
+                m_symbol_state->add_y0 = sy;
+            } else {
+                SchematicSymbolPrimitive prim;
+                prim.type = m_symbol_state->add_rect_mode ? SchematicSymbolPrimitive::Type::Rect : SchematicSymbolPrimitive::Type::Line;
+                prim.x1 = m_symbol_state->add_x0;
+                prim.y1 = m_symbol_state->add_y0;
+                prim.x2 = sx;
+                prim.y2 = sy;
+                prim.thickness = 2.0f;
+                m_symbol_state->sym.body.push_back(prim);
+                m_symbol_state->selected_prim = (int)m_symbol_state->sym.body.size() - 1;
+                m_symbol_dirty = true;
+                m_symbol_state->add_has_first = false;
+                m_symbol_state->add_line_mode = false;
+                m_symbol_state->add_rect_mode = false;
+            }
+        } else {
+            const float pin_r = 7.0f;
+            for (const auto& [name, pt] : m_symbol_state->sym.pins) {
+                ImVec2 p = to_canvas(pt.first, pt.second);
+                if (dist2(p, mp) <= pin_r * pin_r) {
+                    m_symbol_state->drag_pin = name;
+                    break;
+                }
+            }
+            if (m_symbol_state->drag_pin.empty()) {
+                const float ep_r = 6.0f;
+                for (int i = 0; i < (int)m_symbol_state->sym.body.size(); ++i) {
+                    const auto& p = m_symbol_state->sym.body[i];
+                    ImVec2 p0 = to_canvas(p.x1, p.y1);
+                    ImVec2 p1 = to_canvas(p.x2, p.y2);
+                    if (dist2(p0, mp) <= ep_r * ep_r) {
+                        m_symbol_state->selected_prim = i;
+                        m_symbol_state->drag_prim = i;
+                        m_symbol_state->drag_point = 0;
+                        break;
+                    }
+                    if (dist2(p1, mp) <= ep_r * ep_r) {
+                        m_symbol_state->selected_prim = i;
+                        m_symbol_state->drag_prim = i;
+                        m_symbol_state->drag_point = 1;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    if (ImGui::IsMouseDragging(ImGuiMouseButton_Left) && hovered) {
+        float sx, sy;
+        from_canvas(mx, my, sx, sy);
+        if (!m_symbol_state->drag_pin.empty()) {
+            m_symbol_state->sym.pins[m_symbol_state->drag_pin] = {sx, sy};
+            m_symbol_dirty = true;
+        } else if (m_symbol_state->drag_prim >= 0 && m_symbol_state->drag_prim < (int)m_symbol_state->sym.body.size()) {
+            auto& p = m_symbol_state->sym.body[m_symbol_state->drag_prim];
+            if (m_symbol_state->drag_point == 0) { p.x1 = sx; p.y1 = sy; }
+            else if (m_symbol_state->drag_point == 1) { p.x2 = sx; p.y2 = sy; }
+            m_symbol_dirty = true;
+        }
+    }
+    if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+        m_symbol_state->drag_pin.clear();
+        m_symbol_state->drag_prim = -1;
+        m_symbol_state->drag_point = -1;
+    }
+
+    // Draw primitives
+    for (int i = 0; i < (int)m_symbol_state->sym.body.size(); ++i) {
+        const auto& p = m_symbol_state->sym.body[i];
+        ImVec2 p0 = to_canvas(p.x1, p.y1);
+        ImVec2 p1 = to_canvas(p.x2, p.y2);
+        const bool sel = (i == m_symbol_state->selected_prim);
+        const ImU32 col = sel ? IM_COL32(120, 220, 255, 240) : IM_COL32(230, 230, 230, 220);
+        if (p.type == SchematicSymbolPrimitive::Type::Rect) dl->AddRect(p0, p1, col, 2.0f, 0, p.thickness);
+        else dl->AddLine(p0, p1, col, p.thickness);
+        dl->AddCircleFilled(p0, 3.5f, col);
+        dl->AddCircleFilled(p1, 3.5f, col);
+    }
+
+    // Draw pins
+    for (const auto& [name, pt] : m_symbol_state->sym.pins) {
+        ImVec2 p = to_canvas(pt.first, pt.second);
+        dl->AddCircleFilled(p, 5.0f, IM_COL32(255, 200, 100, 255));
+        dl->AddCircle(p, 5.0f, IM_COL32(255, 255, 255, 200), 12, 1.0f);
+        dl->AddText(ImVec2(p.x + 7, p.y - 7), IM_COL32(255, 255, 255, 220), name.c_str());
+    }
+
+    ImGui::EndChild();
+}
+
 void CircuitEditor::render_properties_panel() {
     ImGui::Text("Properties");
     ImGui::Separator();
@@ -1380,7 +1946,6 @@ void CircuitEditor::render_properties_panel() {
         // Show UID (with debug info if empty)
         if (wire.uid.empty()) {
             ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "UID: (EMPTY - BUG!)");
-            spdlog::warn("[WIRE] Selected wire #{} has empty UID!", m_selected_wire_index);
         } else {
             ImGui::TextColored(ImVec4(0.5f, 0.8f, 1.0f, 1.0f), "UID: %s", wire.uid.c_str());
         }
@@ -1441,9 +2006,9 @@ void CircuitEditor::render_properties_panel() {
                     ImGui::Text("Enabled: %s", motor->is_enabled() ? "Yes" : "No");
                     ImGui::Separator();
                     ImGui::TextColored(ImVec4(0.6f, 0.6f, 1.0f, 1.0f), "Parameters");
-                    ImGui::Text("Voltage Rating: %.1f V", 12.0f);
-                    ImGui::Text("No-Load RPM: %.0f", 3000.0f);
-                    ImGui::Text("Stall Torque: %.2f Nm", 0.5f);
+                    ImGui::Text("Voltage Rating: %.1f V", motor->get_voltage_rating());
+                    ImGui::Text("No-Load RPM: %.0f", motor->get_no_load_speed());
+                    ImGui::Text("Stall Torque: %.2f Nm", motor->get_stall_torque());
                     ImGui::Unindent();
                 } else if (auto* sol = TRY_CAST(SolenoidActuator)) {
                     ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f), "Runtime Data");
@@ -1597,8 +2162,19 @@ void CircuitEditor::render_properties_panel() {
                 } else if (ctype == "buck_converter") {
                     ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.5f, 1.0f), "Runtime Data");
                     ImGui::Indent();
-                    ImGui::Text("Input Voltage: 12.0 V");
-                    ImGui::Text("Duty Cycle: 50%%");
+                    float input_voltage = 0.0f;
+                    float duty_cycle = 0.0f;
+                    if (auto* buck_comp = dynamic_cast<BuckConverterComponent*>(comp)) {
+                        duty_cycle = static_cast<float>(buck_comp->circuit_component()->get_parameter("duty_cycle"));
+                        for (auto* pin : buck_comp->circuit_component()->get_pins()) {
+                            if (pin && pin->id == "VIN") {
+                                input_voltage = pin->voltage;
+                                break;
+                            }
+                        }
+                    }
+                    ImGui::Text("Input Voltage: %.2f V", input_voltage);
+                    ImGui::Text("Duty Cycle: %.0f%%", duty_cycle * 100.0f);
                     ImGui::Text("Type: Buck Converter");
                     ImGui::Unindent();
                 } else if (ctype == "boost_converter") {
@@ -1691,10 +2267,15 @@ void CircuitEditor::render_properties_panel() {
                     // Get voltage from port
                     const auto& val = port->value();
                     std::string val_str;
-                    if (const float* f = std::get_if<float>(&val)) {
+                    float mcu_voltage = 0.0f;
+                    if (cat == "mcu" && comp->get_mcu_pin_output_voltage(port->name(), mcu_voltage)) {
+                        val_str = std::to_string(mcu_voltage);
+                    } else if (const float* f = std::get_if<float>(&val)) {
                         val_str = std::to_string(*f);
+                    } else if (const double* d = std::get_if<double>(&val)) {
+                        val_str = std::to_string(*d);
                     } else if (const bool* b = std::get_if<bool>(&val)) {
-                        val_str = *b ? "true" : "false";
+                        val_str = *b ? "5.000000" : "0.000000";
                     } else {
                         val_str = "-";
                     }

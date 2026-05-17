@@ -22,7 +22,7 @@ class ATmegaInterpreter {
 public:
     struct InterpreterState {
         // Program counter (flash address)
-        uint16_t PC = 0;
+        uint32_t PC = 0;
 
         // Stack pointer
         uint16_t SP = 0xFFFF;
@@ -93,10 +93,10 @@ public:
     uint64_t instruction_count() const { return m_instruction_count; }
 
     // Breakpoint management
-    void set_breakpoint(uint16_t addr);
-    void clear_breakpoint(uint16_t addr);
+    void set_breakpoint(uint32_t addr);
+    void clear_breakpoint(uint32_t addr);
     void clear_all_breakpoints();
-    bool has_breakpoint(uint16_t addr) const;
+    bool has_breakpoint(uint32_t addr) const;
 
 private:
     // Instruction decoding
@@ -108,7 +108,7 @@ private:
         uint8_t cycles;  // Execution cycles
     };
 
-    Instruction decode_instruction(uint16_t addr) const;
+    Instruction decode_instruction(uint32_t addr) const;
     bool execute_instruction(const Instruction& inst);
 
     // Instruction implementations
@@ -150,6 +150,7 @@ private:
     bool exec_EICALL(const Instruction& inst);
     bool exec_CP(const Instruction& inst);
     bool exec_CPC(const Instruction& inst);
+    bool exec_CPSE(const Instruction& inst);
     bool exec_CPI(const Instruction& inst);
     bool exec_BREQ(const Instruction& inst);
     bool exec_BRNE(const Instruction& inst);
@@ -240,6 +241,11 @@ private:
     void update_s_flag();
     void update_h_flag(uint8_t a, uint8_t b, bool is_subtraction);
 
+    // Arduino semantics: when firmware writes directly to a PWM-capable PORT bit (e.g. digitalWrite),
+    // the core turns off PWM for that channel first. We emulate that behavior here to avoid "stuck PWM"
+    // when the turnOffPWM path isn't modeled perfectly by the interpreter yet.
+    void maybe_disable_pwm_on_port_write(uint16_t data_addr, uint8_t new_port_value);
+
     // Operand extraction helpers
     uint8_t get_rd(uint16_t opcode) const;
     uint8_t get_rr(uint16_t opcode) const;
@@ -258,13 +264,17 @@ private:
     uint64_t m_instruction_count = 0;
 
     // Breakpoints
-    std::map<uint16_t, bool> m_breakpoints;
+    std::map<uint32_t, bool> m_breakpoints;
+    uint32_t m_timer0_cycle_accum = 0;
+    uint8_t m_cycle_adjust = 0;
 
     // Instruction table (for quick dispatch) - use array for O(1) lookup
     using ExecFunc = bool (ATmegaInterpreter::*)(const Instruction&);
     std::array<ExecFunc, 65536> m_instruction_table;
 
     void build_instruction_table();
+    void update_timers(uint8_t cycles);
+    void service_interrupt(uint8_t vector_index);
 };
 
 } // namespace mechatron

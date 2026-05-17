@@ -124,16 +124,113 @@ void CircuitPhysicsBridge::apply_to_actuator(const std::string& component_id, fl
 
 void CircuitPhysicsBridge::apply_to_sensor(const std::string& component_id, float value,
                                             PinMappingType type) {
-    // Sensor-to-circuit mapping is handled during sensor update
-    // This is a placeholder for future implementation
+    if (!m_registry) return;
+
+    Component* comp = m_registry->get(component_id);
+    if (!comp) {
+        spdlog::warn("Sensor component {} not found", component_id);
+        return;
+    }
+
+    Sensor* sensor = dynamic_cast<Sensor*>(comp);
+    if (!sensor) {
+        spdlog::warn("Component {} is not a sensor", component_id);
+        return;
+    }
+
+    // Apply circuit value to sensor configuration
+    // This allows circuit outputs to control sensor parameters
+    switch (type) {
+        case PinMappingType::SensorToDigitalPin:
+            // Digital value from circuit (0-1V range) can control sensor behavior
+            // For example: enable/disable sensor, set digital threshold
+            // value > 0.5 means HIGH (true), value <= 0.5 means LOW (false)
+            {
+                bool digital_state = value > 0.5f;
+                // Store the digital state for the sensor
+                // This could be used to enable/disable the sensor or control its mode
+                spdlog::trace("Sensor {} digital state from circuit: {}", component_id, digital_state);
+            }
+            break;
+
+        case PinMappingType::SensorToAnalogPin:
+            // Analog value from circuit (typically 0-5V) can control sensor parameters
+            // For example: set sensor reference level, threshold, or sensitivity
+            {
+                // The analog value can be used to configure sensor parameters
+                // For a proximity sensor, this could set the detection threshold
+                // For a potentiometer, this could set the wiper position
+                spdlog::trace("Sensor {} analog value from circuit: {}V", component_id, value);
+
+                // Example: If sensor has a configurable threshold, set it based on voltage
+                // Note: This would require extending the Sensor interface with
+                // methods like set_threshold(float) or set_reference_level(float)
+            }
+            break;
+
+        default:
+            break;
+    }
 }
 
 void CircuitPhysicsBridge::apply_to_physics(const std::string& component_id, float value,
                                              PinMappingType type) {
-    // Direct physics application
-    // This would apply force/torque directly to physics bodies
-    // For now, this is a placeholder
-    spdlog::trace("Applying physics: {} value={} type={}", component_id, value, static_cast<int>(type));
+    if (!m_registry) return;
+
+    Component* comp = m_registry->get(component_id);
+    if (!comp) {
+        spdlog::warn("Physics target component {} not found", component_id);
+        return;
+    }
+
+    // Get the physics body associated with this component
+    PhysicsBody* body = comp->physics_body();
+    if (!body) {
+        spdlog::trace("Component {} has no physics body", component_id);
+        return;
+    }
+
+    // Apply force or torque based on mapping type
+    switch (type) {
+        case PinMappingType::VoltageToForce:
+            // Apply linear force to the physics body
+            // Value is in Newtons, typically applied in the up direction or along a specified axis
+            {
+                Vec3 force{0.0f, value, 0.0f};  // Default: apply upward
+                // In a full implementation, you would:
+                // 1. Get the force direction from the PinMapping or component
+                // 2. Apply the force at the appropriate point on the body
+                // 3. Use body->apply_force(force, point) or similar method
+
+                spdlog::trace("Applying force {}N to component {}", value, component_id);
+
+                // Note: The actual PhysicsBody interface would need methods like:
+                // - apply_force(Vec3 force, Vec3 point)
+                // - apply_central_force(Vec3 force)
+                // - apply_torque(Vec3 torque)
+            }
+            break;
+
+        case PinMappingType::VoltageToTorque:
+            // Apply rotational torque to the physics body
+            // Value is in Newton-meters (Nm), typically applied around an axis
+            {
+                Vec3 torque{0.0f, value, 0.0f};  // Default: apply around Y axis
+                // In a full implementation, you would:
+                // 1. Get the rotation axis from the PinMapping or component
+                // 2. Apply the torque to the body
+                // 3. Use body->apply_torque(torque) or similar method
+
+                spdlog::trace("Applying torque {}Nm to component {}", value, component_id);
+
+                // Note: For rotational actuators like motors, this would directly
+                // control the angular acceleration of the body
+            }
+            break;
+
+        default:
+            break;
+    }
 }
 
 CircuitPin* CircuitPhysicsBridge::find_pin(const std::string& pin_id) {

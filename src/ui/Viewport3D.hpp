@@ -1,7 +1,10 @@
 #pragma once
 
 #include <string>
+#include <vector>
+#include <imgui.h>
 #include "core/Types.hpp"
+#include "OscilloscopePanel.hpp"
 
 namespace mechatron {
 
@@ -10,6 +13,9 @@ class SimulationOrchestrator;
 class GridRenderer;
 class ComponentRenderer;
 class GizmoRenderer;
+class CircuitEditor;
+class CodeEditor;
+class ModelEditor;
 
 /**
  * @brief 3D Viewport panel for scene visualization
@@ -40,8 +46,18 @@ public:
     void set_grid_visible(bool visible) { m_grid_visible = visible; }
     void set_axes_visible(bool visible) { m_axes_visible = visible; }
 
+    // Set editor references
+    void set_circuit_editor(CircuitEditor* editor) { m_circuit_editor = editor; }
+    void set_code_editor(CodeEditor* editor) { m_code_editor = editor; }
+    void set_model_editor(ModelEditor* editor) { m_model_editor = editor; }
+
 private:
+    void render_3d_viewport(Renderer& renderer, SimulationOrchestrator& orchestrator, ImVec2 total_size, float toolbar_height);
+    void render_circuit_editor_tab(SimulationOrchestrator& orchestrator);
+    void render_code_editor_tab(SimulationOrchestrator& orchestrator);
+    void render_model_editor_tab(SimulationOrchestrator& orchestrator);
     void render_toolbar();
+    void render_oscilloscope_tab(SimulationOrchestrator& orchestrator);
     void handle_camera_input();
     void render_gizmo(Renderer& renderer, SimulationOrchestrator& orchestrator);
     void handle_gizmo_input_after_image(Renderer& renderer, SimulationOrchestrator& orchestrator);
@@ -72,8 +88,16 @@ private:
     Renderer* m_renderer = nullptr;
     SimulationOrchestrator* m_orchestrator = nullptr;
 
+    // Editor references
+    CircuitEditor* m_circuit_editor = nullptr;
+    CodeEditor* m_code_editor = nullptr;
+    ModelEditor* m_model_editor = nullptr;
+
     // Context menu state
     bool m_show_context_menu = false;
+
+    // Oscilloscope panels (one per opened scope)
+    std::vector<OscilloscopePanel> m_oscilloscope_panels;
 };
 
 } // namespace mechatron

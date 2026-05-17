@@ -8,17 +8,77 @@
 #include <algorithm>
 #include <cctype>
 #include <ctime>
+#include <cstring>
+#include <fstream>
+#include <nlohmann/json.hpp>
 
 namespace mechatron {
 
 SerialMonitor::SerialMonitor() {
+    // Load saved configuration
+    load_config();
+
     // Add welcome message
     add_message(SerialMessage::Type::Info, "Serial Monitor initialized");
     add_message(SerialMessage::Type::Info, "Connect to a port to begin communication");
 }
 
+SerialMonitor::~SerialMonitor() {
+    // Save configuration before exit
+    save_config();
+
+    // Ensure disconnect on destruction
+    if (m_connected) {
+        disconnect();
+    }
+}
+
+void SerialMonitor::save_config() {
+    nlohmann::json config;
+    config["port"] = m_port;
+    config["baud_rate"] = m_baud_rate;
+
+    try {
+        std::ofstream out(config_file_path());
+        out << config.dump(2);
+        spdlog::debug("[SerialMonitor] Configuration saved to {}", config_file_path());
+    } catch (const std::exception& e) {
+        spdlog::warn("[SerialMonitor] Failed to save configuration: {}", e.what());
+    }
+}
+
+void SerialMonitor::load_config() {
+    try {
+        std::ifstream in(config_file_path());
+        if (!in.is_open()) {
+            spdlog::debug("[SerialMonitor] No configuration file found, using defaults");
+            return;
+        }
+
+        nlohmann::json config;
+        in >> config;
+
+        if (config.contains("port")) m_port = config["port"];
+        if (config.contains("baud_rate")) m_baud_rate = config["baud_rate"];
+
+        spdlog::info("[SerialMonitor] Configuration loaded: port={}, baud={}", m_port, m_baud_rate);
+    } catch (const std::exception& e) {
+        spdlog::warn("[SerialMonitor] Failed to load configuration: {}", e.what());
+    }
+}
+
+void SerialMonitor::set_baud_rate(int baud) {
+    m_baud_rate = baud;
+    save_config();  // Save configuration when changed
+}
+
+void SerialMonitor::set_port(const std::string& port) {
+    m_port = port;
+    save_config();  // Save configuration when changed
+}
+
 void SerialMonitor::render(SimulationOrchestrator& orchestrator) {
-    ImGui::Begin("Serial Monitor");
+    // No Begin/End - we're inside a tab
 
     render_menu_bar();
 
@@ -57,45 +117,33 @@ void SerialMonitor::render(SimulationOrchestrator& orchestrator) {
     if (m_show_stats) {
         render_stats();
     }
-
-    ImGui::End();
 }
 
 void SerialMonitor::render_menu_bar() {
-    if (ImGui::BeginMenuBar()) {
-        if (ImGui::BeginMenu("File")) {
-            if (ImGui::MenuItem("Clear Log", "Ctrl+L")) {
-                clear();
-            }
-            if (ImGui::MenuItem("Save Log...", "Ctrl+S")) {
-                spdlog::info("Save log (not implemented)");
-            }
-            ImGui::EndMenu();
-        }
-
-        if (ImGui::BeginMenu("View")) {
-            ImGui::MenuItem("Settings", nullptr, &m_show_settings);
-            ImGui::MenuItem("Statistics", nullptr, &m_show_stats);
-            ImGui::EndMenu();
-        }
-
-        if (ImGui::BeginMenu("Format")) {
-            if (ImGui::MenuItem("ASCII", nullptr, !m_hex_mode)) {
-                m_hex_mode = false;
-            }
-            if (ImGui::MenuItem("HEX", nullptr, m_hex_mode)) {
-                m_hex_mode = true;
-            }
-            ImGui::EndMenu();
-        }
-
-        ImGui::EndMenuBar();
+    // Toolbar buttons instead of menu bar (we're inside a tab)
+    if (ImGui::Button("Clear##Serial")) {
+        clear();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Save Log##Serial")) {
+        spdlog::info("Save log (not implemented)");
+    }
+    ImGui::SameLine();
+    ImGui::Checkbox("Settings##Serial", &m_show_settings);
+    ImGui::SameLine();
+    ImGui::Checkbox("Stats##Serial", &m_show_stats);
+    ImGui::SameLine();
+    if (ImGui::RadioButton("ASCII##Serial", !m_hex_mode)) {
+        m_hex_mode = false;
+    }
+    ImGui::SameLine();
+    if (ImGui::RadioButton("HEX##Serial", m_hex_mode)) {
+        m_hex_mode = true;
     }
 }
 
 void SerialMonitor::render_output_area() {
-    ImGuiWindowFlags flags = ImGuiWindowFlags_HorizontalScrollbar;
-    ImGui::BeginChild("SerialOutput", ImVec2(0, -ImGui::GetFrameHeightWithSpacing() * 2), true, flags);
+    // No BeginChild - we're inside a tab, scroll is handled by parent
 
     // Display messages
     for (const auto& msg : m_messages) {
@@ -135,8 +183,6 @@ void SerialMonitor::render_output_area() {
     if (m_auto_scroll && ImGui::GetScrollY() >= ImGui::GetScrollMaxY()) {
         ImGui::SetScrollHereY(1.0f);
     }
-
-    ImGui::EndChild();
 }
 
 void SerialMonitor::render_input_area() {
@@ -195,8 +241,9 @@ void SerialMonitor::render_input_area() {
         ImGui::SameLine();
 
         static int baud_preset = 2;  // Default to 9600
-        const char* baud_rates[] = {"300", "1200", "9600", "19200", "38400", "57600", "115200"};
-        if (ImGui::Combo("##Baud", &baud_preset, baud_rates, 7)) {
+        const char* baud_rates[] = {"300", "1200", "2400", "4800", "9600", "14400", "19200",
+                                     "28800", "38400", "57600", "115200", "230400", "460800", "921600"};
+        if (ImGui::Combo("##Baud", &baud_preset, baud_rates, 14)) {
             m_baud_rate = std::atoi(baud_rates[baud_preset]);
         }
     }
@@ -262,24 +309,66 @@ void SerialMonitor::send(const std::string& data) {
         to_send = hex_to_string(to_send);
     }
 
-    // Send data (placeholder - would use actual serial port)
+    // Send data via serial port
+    ssize_t bytes_written = m_serial.write(to_send.c_str(), to_send.size());
+
+    if (bytes_written < 0) {
+        add_message(SerialMessage::Type::Error, "Failed to send data");
+        return;
+    }
+
+    // Add to message log
     add_message(SerialMessage::Type::Tx, data);
 
     // Update stats
-    m_stats.bytes_sent += to_send.size();
+    m_stats.bytes_sent += bytes_written;
     m_stats.messages_sent++;
 
-    spdlog::debug("Serial TX: {}", to_send);
+    spdlog::debug("Serial TX: {} ({} bytes)", data, bytes_written);
 }
 
 void SerialMonitor::connect() {
-    // Placeholder - would use actual serial port library
+    if (m_connected) {
+        add_message(SerialMessage::Type::Info, "Already connected to " + m_port);
+        return;
+    }
+
+    if (m_port.empty()) {
+        add_message(SerialMessage::Type::Error, "No port specified");
+        return;
+    }
+
+    // Open and configure serial port
+    if (!m_serial.open(m_port, m_baud_rate)) {
+        add_message(SerialMessage::Type::Error, "Failed to open port: " + m_port);
+        return;
+    }
+
+    // Start read thread
+    m_read_thread_running = true;
+    m_read_thread = std::thread(&SerialMonitor::read_thread_func, this);
+
     m_connected = true;
     add_message(SerialMessage::Type::Info, "Connected to " + m_port);
     spdlog::info("Serial connected: {} @ {} baud", m_port, m_baud_rate);
 }
 
 void SerialMonitor::disconnect() {
+    if (!m_connected) {
+        return;
+    }
+
+    // Stop read thread
+    m_read_thread_running = false;
+
+    // Wait for thread to finish (with timeout)
+    if (m_read_thread.joinable()) {
+        m_read_thread.join();
+    }
+
+    // Close serial port
+    m_serial.close();
+
     m_connected = false;
     add_message(SerialMessage::Type::Info, "Disconnected from " + m_port);
     spdlog::info("Serial disconnected");
@@ -355,9 +444,113 @@ std::string SerialMonitor::string_to_hex(const std::string& input) const {
 
 std::string SerialMonitor::hex_to_string(const std::string& hex) const {
     std::string result;
-    // Simple hex to string conversion (not fully implemented)
-    // For production, would need proper hex parsing
-    return hex;
+
+    // Skip 0x prefix if present
+    size_t start = 0;
+    if (hex.size() >= 2 && hex[0] == '0' && (hex[1] == 'x' || hex[1] == 'X')) {
+        start = 2;
+    }
+
+    // Parse hex characters in pairs
+    for (size_t i = start; i < hex.size(); ) {
+        // Skip whitespace and separators
+        if (std::isspace(static_cast<unsigned char>(hex[i])) || hex[i] == ',' || hex[i] == ':' || hex[i] == '-') {
+            ++i;
+            continue;
+        }
+
+        // Parse two hex digits
+        int byte = 0;
+        int digits = 0;
+
+        while (digits < 2 && i < hex.size()) {
+            char c = hex[i];
+            int value = 0;
+
+            if (c >= '0' && c <= '9') {
+                value = c - '0';
+            } else if (c >= 'a' && c <= 'f') {
+                value = 10 + (c - 'a');
+            } else if (c >= 'A' && c <= 'F') {
+                value = 10 + (c - 'A');
+            } else if (std::isspace(static_cast<unsigned char>(c)) || c == ',' || c == ':' || c == '-') {
+                ++i;
+                continue;  // Skip separators between digits
+            } else {
+                break;  // Invalid character
+            }
+
+            byte = (byte << 4) | value;
+            ++digits;
+            ++i;
+        }
+
+        if (digits > 0) {
+            result.push_back(static_cast<char>(byte & 0xFF));
+        }
+
+        // Skip trailing whitespace
+        while (i < hex.size() && std::isspace(static_cast<unsigned char>(hex[i]))) {
+            ++i;
+        }
+    }
+
+    return result;
+}
+
+void SerialMonitor::read_thread_func() {
+    spdlog::info("Serial read thread started");
+
+    char buffer[1024];
+    std::string line_buffer;
+
+    while (m_read_thread_running) {
+        if (!m_serial.is_open()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            continue;
+        }
+
+        // Read data from serial port
+        ssize_t bytes_read = m_serial.read(buffer, sizeof(buffer) - 1);
+
+        if (bytes_read > 0) {
+            buffer[bytes_read] = '\0';
+
+            // Process received data
+            for (ssize_t i = 0; i < bytes_read; i++) {
+                char c = buffer[i];
+
+                // Build line buffer
+                if (c == '\n' || c == '\r') {
+                    if (!line_buffer.empty()) {
+                        // Add complete line to messages
+                        std::lock_guard<std::mutex> lock(m_mutex);
+                        add_message(SerialMessage::Type::Rx, line_buffer);
+                        line_buffer.clear();
+
+                        // Update stats
+                        m_stats.bytes_received += bytes_read;
+                        m_stats.messages_received++;
+                    }
+                } else {
+                    line_buffer += c;
+                }
+            }
+
+            // Log raw bytes if not newline
+            if (bytes_read > 0 && line_buffer.empty() &&
+                std::string(buffer, bytes_read).find_first_of("\n\r") == std::string::npos) {
+                std::string data(buffer, bytes_read);
+                std::lock_guard<std::mutex> lock(m_mutex);
+                add_message(SerialMessage::Type::Rx, data);
+            }
+        }
+
+        // Small sleep to prevent busy waiting
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    spdlog::info("Serial read thread stopped");
 }
 
 } // namespace mechatron

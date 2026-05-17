@@ -42,6 +42,13 @@ public:
     void set_axes_visible(bool visible) { m_axes_visible = visible; }
     void set_grid_visible(bool visible) { m_grid_visible = visible; }
 
+    // Theme-configurable default grid color
+    static Vec3& default_grid_color() {
+        static Vec3 def{0.3f, 0.3f, 0.3f};
+        return def;
+    }
+    static void set_default_grid_color(const Vec3& color) { default_grid_color() = color; }
+
 private:
     void create_grid_mesh(float size, int divisions);
     void create_axes_mesh();
@@ -55,7 +62,7 @@ private:
     int m_grid_vertex_count = 0;
     int m_axes_vertex_count = 0;
 
-    Vec3 m_grid_color{0.3f, 0.3f, 0.3f};
+    Vec3 m_grid_color = default_grid_color();
     bool m_axes_visible = true;
     bool m_grid_visible = true;
 };

@@ -9,6 +9,7 @@ namespace mechatron {
 std::vector<ComponentDescriptor> ElecPowerPlugin::components() const {
     return {
         {"dc_voltage", "DC Voltage", "power", "DC voltage source (power supply)"},
+        {"ground", "Ground", "power", "Ground reference (0V)"},
         {"h_bridge", "H-Bridge", "power", "H-Bridge motor driver"},
         {"buck_converter", "Buck Converter", "power", "Step-down DC-DC converter"},
         {"boost_converter", "Boost Converter", "power", "Step-up DC-DC converter"},
@@ -20,6 +21,7 @@ std::unique_ptr<Component> ElecPowerPlugin::create(std::string_view type) {
     using namespace std;
     static const unordered_map<string, function<unique_ptr<Component>()>> factory = {
         {"dc_voltage", []() { return make_unique<DCVoltageComponent>(make_unique<DCVoltageSource>()); }},
+        {"ground", []() { return make_unique<GroundComponent>(make_unique<Ground>()); }},
         {"h_bridge", []() { return make_unique<HBridgeComponent>(make_unique<HBridge>()); }},
         {"buck_converter", []() { return make_unique<BuckConverterComponent>(make_unique<BuckConverter>()); }},
         {"boost_converter", []() { return make_unique<BoostConverterComponent>(make_unique<BoostConverter>()); }},

@@ -1,0 +1,11 @@
+directories:
+  data: tools/arduino-cli/data
+  downloads: tools/arduino-cli/downloads
+  user: tools/arduino-cli/user
+logging:
+  file: ""
+  format: text
+  level: warn
+metrics:
+  addr: ""
+  enabled: false

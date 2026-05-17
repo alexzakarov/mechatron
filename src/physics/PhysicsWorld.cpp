@@ -4,6 +4,12 @@
 
 namespace mechatron {
 
+// Default collision radius for physics bodies (configurable)
+static float& default_collision_radius() {
+    static float def = 0.5f;
+    return def;
+}
+
 PhysicsWorld::PhysicsWorld() {
     spdlog::info("PhysicsWorld initialized");
 }
@@ -148,20 +154,21 @@ void PhysicsWorld::resolve_collisions() {
             const auto& shape_a = m_shapes[a->id];
             const auto& shape_b = m_shapes[b->id];
 
-            float radius_a = 0.5f;
-            float radius_b = 0.5f;
+            float radius_a = default_collision_radius();
+            float radius_b = default_collision_radius();
 
+            // Try to get actual radius from collision shapes
             if (shape_a.type == CollisionShape::Sphere) radius_a = shape_a.sphere_radius;
             if (shape_a.type == CollisionShape::Box) {
                 // Use bounding sphere radius for simplified collision
                 // For ground-like objects, use a reasonable default
                 float max_extent = std::max({shape_a.box_extents.x, shape_a.box_extents.y, shape_a.box_extents.z});
-                radius_a = (max_extent > 5.0f) ? 0.5f : max_extent;  // Cap large objects
+                radius_a = (max_extent > 5.0f) ? default_collision_radius() : max_extent;  // Cap large objects
             }
             if (shape_b.type == CollisionShape::Sphere) radius_b = shape_b.sphere_radius;
             if (shape_b.type == CollisionShape::Box) {
                 float max_extent = std::max({shape_b.box_extents.x, shape_b.box_extents.y, shape_b.box_extents.z});
-                radius_b = (max_extent > 5.0f) ? 0.5f : max_extent;
+                radius_b = (max_extent > 5.0f) ? default_collision_radius() : max_extent;
             }
 
             // Check distance

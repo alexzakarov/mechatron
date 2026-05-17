@@ -24,6 +24,7 @@ public:
     void step();
 
     void update();
+    bool consume_step_request();
 
     double physics_step_size() const { return m_physics_step_us * 1e-6; }
     double physics_step_size_us() const { return m_physics_step_us; }
@@ -50,6 +51,7 @@ private:
     double m_realtime_factor = 1.0;
     uint32_t m_max_steps_per_frame = 16;
     bool m_deterministic = true;
+    bool m_step_requested = false;
 
     std::chrono::steady_clock::time_point m_last_real_time;
 };

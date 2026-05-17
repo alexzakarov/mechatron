@@ -9,6 +9,7 @@
 #include <vector>
 #include <memory>
 #include <functional>
+#include <unordered_map>
 
 namespace mechatron {
 
@@ -67,6 +68,21 @@ public:
     // Circuit simulation
     void step_circuit(double dt);
     bool has_circuit() const { return m_circuit_simulator != nullptr; }
+    void mark_circuit_topology_dirty() { m_circuit_topology_dirty = true; }
+
+    // Actuator voltage propagation
+    void propagate_voltages_to_actuators();
+
+    // Add equivalent circuits for actuators
+    void add_actuator_equivalent_circuits();
+    void add_mcu_equivalent_circuits();
+    void update_mcu_equivalent_sources();
+    void sync_mcu_power_from_ngspice();
+    void sync_mcu_inputs_from_ngspice();
+
+    bool get_actuator_terminal_current(std::string_view component_id,
+                                       std::string_view pin_name,
+                                       float& current) const;
 
 private:
     TimeManager m_time;
@@ -81,6 +97,7 @@ private:
 
     // Circuit simulator instance
     class CircuitSimulator* m_circuit_simulator = nullptr;
+    bool m_circuit_topology_dirty = true;
 
     std::string m_selected_component;
 
@@ -90,6 +107,16 @@ private:
         void operator()(class PhysicsWorld* p);
     };
     std::unique_ptr<PhysicsWorld, PhysicsWorldDeleter> m_physics;
+
+    // Storage for equivalent circuit components (e.g., motor resistors)
+    // These are owned by the orchestrator and registered with the circuit simulator
+    // Forward declared - use unique_ptr with deleter in cpp
+    struct CircuitComponentDeleter {
+        void operator()(class CircuitComponent* p);
+    };
+    std::vector<std::unique_ptr<class CircuitComponent, CircuitComponentDeleter>> m_equivalent_components;
+    std::unordered_map<std::string, std::string> m_actuator_equivalent_map;
+    std::unordered_map<std::string, std::string> m_mcu_equivalent_source_map;
 };
 
 } // namespace mechatron

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/Types.hpp"
 #include <string>
 #include <vector>
 #include <memory>
@@ -13,26 +14,7 @@ namespace mechatron {
 
 namespace mechatron {
 
-// 3D Point/Vector
-struct Vec3 {
-    float x, y, z;
-
-    Vec3() : x(0), y(0), z(0) {}
-    Vec3(float x_, float y_, float z_) : x(x_), y(y_), z(z_) {}
-
-    Vec3 operator+(const Vec3& v) const { return {x + v.x, y + v.y, z + v.z}; }
-    Vec3 operator-(const Vec3& v) const { return {x - v.x, y - v.y, z - v.z}; }
-    Vec3 operator*(float s) const { return {x * s, y * s, z * s}; }
-    float dot(const Vec3& v) const { return x * v.x + y * v.y + z * v.z; }
-    Vec3 cross(const Vec3& v) const {
-        return {y * v.z - z * v.y, z * v.x - x * v.z, x * v.y - y * v.x};
-    }
-    float length() const { return std::sqrt(x * x + y * y + z * z); }
-    Vec3 normalized() const {
-        float len = length();
-        return len > 0 ? Vec3(x / len, y / len, z / len) : Vec3();
-    }
-};
+// Note: CAD uses the core Vec3 type from core/Types.hpp.
 
 // Triangle face for mesh
 struct Triangle {

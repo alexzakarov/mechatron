@@ -11,6 +11,18 @@
 
 namespace mechatron {
 
+/**
+ * @brief Physics/Simulation timestep configuration
+ *
+ * Global default timestep for control algorithms and physics simulation.
+ * Default is 1ms (0.001 seconds) = 1kHz sampling rate.
+ */
+inline float& default_physics_timestep() {
+    static float def = 0.001f;  // 1ms default
+    return def;
+}
+inline void set_default_physics_timestep(float dt_seconds) { default_physics_timestep() = dt_seconds; }
+
 // ============================================================================
 // PID Controller
 // ============================================================================
@@ -36,7 +48,8 @@ public:
         float output_max = 1e6f;   // Maximum output
         float integral_min = -1e6f;// Integral clamping (anti-windup)
         float integral_max = 1e6f; // Integral clamping (anti-windup)
-        float dt = 0.001f;         // Sample time (seconds)
+        float max_error = 50.0f;   // Maximum error magnitude for integration (prevents windup on large steps)
+        float dt = default_physics_timestep();  // Sample time (seconds)
         bool derivative_on_measurement = true; // Use derivative on measurement instead of error
     };
 
@@ -106,7 +119,7 @@ public:
         float output_min = -1e6f;
         float output_max = 1e6f;
         float integral_max = 1e6f;  // Anti-windup
-        float dt = 0.001f;
+        float dt = default_physics_timestep();
     };
 
     PIController();
@@ -154,7 +167,7 @@ public:
         float pole = 10.0f;        // Pole location (rad/s)
         float output_min = -1e6f;
         float output_max = 1e6f;
-        float dt = 0.001f;
+        float dt = default_physics_timestep();
     };
 
     LeadLagCompensator();
@@ -203,7 +216,7 @@ public:
         std::vector<float> N;               // Feedforward gain
         int n_states = 2;
         int n_inputs = 1;
-        float dt = 0.001f;
+        float dt = default_physics_timestep();
     };
 
     StateSpaceController();
@@ -327,7 +340,7 @@ public:
     struct Params {
         float a = 0.9f;  // System pole (discrete)
         float b = 0.1f;  // System zero
-        float dt = 0.001f;
+        float dt = default_physics_timestep();
     };
 
     DeadbeatController();
@@ -373,7 +386,7 @@ public:
         std::vector<std::vector<float>> Q;  // Process noise covariance
         std::vector<std::vector<float>> R;  // Measurement noise covariance
         std::vector<std::vector<float>> P;  // Estimate error covariance
-        float dt = 0.001f;
+        float dt = default_physics_timestep();
     };
 
     KalmanFilter();
@@ -417,7 +430,7 @@ public:
         int horizon = 10;           // Prediction horizon
         int n_states = 2;
         int n_inputs = 1;
-        float dt = 0.001f;
+        float dt = default_physics_timestep();
         std::vector<std::vector<float>> A;
         std::vector<std::vector<float>> B;
         std::vector<std::vector<float>> Q;  // State cost
@@ -470,7 +483,7 @@ public:
         float max_velocity = 1.0f;
         float max_acceleration = 5.0f;
         float max_jerk = 50.0f;
-        float dt = 0.001f;
+        float dt = default_physics_timestep();
         int polynomial_order = 5;  // 3 or 5
     };
 
