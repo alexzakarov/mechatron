@@ -21,7 +21,7 @@ public:
     float fov() const { return m_fov; }
 
     void set_fov(float fov) { m_fov = fov; }
-    void set_near_far(float near, float far) { m_near = near; m_far = far; }
+    void set_near_far(float near_val, float far_val) { m_near = near_val; m_far = far_val; }
 
     // Orbit camera controls
     void orbit(float delta_yaw, float delta_pitch);

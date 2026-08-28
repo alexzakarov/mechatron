@@ -145,6 +145,7 @@ private:
     float m_spring_k = 50.0f;      // Spring constant (N/m)
     float m_plunger_position = 0.0f; // 0-1 normalized
     float m_plunger_velocity = 0.0f;
+    float m_force_constant = 0.1f; // N/A^2 simplified force constant
 
     // Calculate electromagnetic force
     float calculate_force(float voltage) const;

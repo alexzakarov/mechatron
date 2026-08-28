@@ -52,6 +52,17 @@ bool input_text_multiline_string(const char* label, std::string& value, const Im
 }
 
 std::string shell_quote(const std::string& value) {
+#ifdef _WIN32
+    std::string quoted = "\"";
+    for (char ch : value) {
+        if (ch == '"') {
+            quoted += "\\\"";
+        } else {
+            quoted += ch;
+        }
+    }
+    quoted += "\"";
+#else
     std::string quoted = "'";
     for (char ch : value) {
         if (ch == '\'') {
@@ -61,6 +72,7 @@ std::string shell_quote(const std::string& value) {
         }
     }
     quoted += "'";
+#endif
     return quoted;
 }
 
@@ -93,7 +105,11 @@ std::string find_project_file(const std::filesystem::path& relative_path) {
 }
 
 std::string bundled_arduino_cli_path() {
+#ifdef _WIN32
+    return find_project_file("tools/arduino-cli/bin/arduino-cli.exe");
+#else
     return find_project_file("tools/arduino-cli/bin/arduino-cli");
+#endif
 }
 
 std::string bundled_arduino_cli_config_path() {
@@ -703,12 +719,62 @@ bool CodeEditor::check_arduino_cli() {
     if (output.find("arduino-cli") != std::string::npos ||
         output.find("Version") != std::string::npos) {
         spdlog::info("Arduino CLI detected: {}", output);
+
+        // Auto-install required core if not present
+        ensure_core_installed();
+
         return true;
     }
 
     m_compile_errors = "Arduino CLI executable found but returned unexpected output: " + output;
     spdlog::error(m_compile_errors);
     return false;
+}
+
+void CodeEditor::ensure_core_installed() {
+    // Extract core from FQBN (e.g. "arduino:avr:uno" -> "arduino:avr")
+    std::string core;
+    int colon_count = 0;
+    for (char c : m_fqbn) {
+        if (c == ':') {
+            colon_count++;
+            if (colon_count == 2) break;
+        }
+        core += c;
+    }
+
+    if (colon_count < 2) return;
+
+    // Check if core is already installed
+    std::string list_output = run_arduino_command({"core", "list", "--format", "json"});
+    bool installed = false;
+
+    try {
+        auto json = nlohmann::json::parse(list_output);
+        if (json.is_array()) {
+            for (const auto& item : json) {
+                if (item.value("id", "") == core) {
+                    installed = true;
+                    break;
+                }
+            }
+        }
+    } catch (...) {
+        // If we can't parse, try a simpler text check
+        installed = list_output.find(core) != std::string::npos;
+    }
+
+    if (installed) return;
+
+    // Update core index first
+    spdlog::info("Updating Arduino core index for {}...", core);
+    run_arduino_command({"core", "update-index"});
+
+    // Install the core
+    spdlog::info("Installing Arduino core: {}...", core);
+    std::string install_output = run_arduino_command({"core", "install", core});
+    spdlog::info("Core install output: {}", install_output);
+    spdlog::info("Arduino core {} installed successfully", core);
 }
 
 std::string CodeEditor::run_arduino_command(const std::vector<std::string>& args) {
@@ -728,7 +794,11 @@ std::string CodeEditor::run_arduino_command(const std::vector<std::string>& args
 
     auto project_root = project_root_from_cli_config(m_arduino_cli_config_path);
     if (!project_root.empty()) {
+#ifdef _WIN32
+        cmd = "cd /d " + shell_quote(project_root.string()) + " && " + cmd;
+#else
         cmd = "cd " + shell_quote(project_root.string()) + " && " + cmd;
+#endif
     }
 
 #ifdef _WIN32

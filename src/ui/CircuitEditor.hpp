@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <memory>
 #include <imgui.h>
 #include "ui/SchematicSymbol.hpp"
 

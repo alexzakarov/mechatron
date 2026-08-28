@@ -19,17 +19,13 @@ target_link_libraries(mechatron_ui PUBLIC
     mechatron_core
     mechatron_io
     mechatron_renderer
+    instrument_plugin_lib
     imgui::imgui
     glfw
 )
 
 if(WIN32)
     target_link_libraries(mechatron_ui PUBLIC shell32 ole32 comdlg32)
-endif()
-
-# Link instrument plugin when enabled
-if(MECHATRON_PLUGIN_INSTRUMENT)
-    target_link_libraries(mechatron_ui PUBLIC instrument_plugin_lib)
 endif()
 
 target_compile_features(mechatron_ui PUBLIC cxx_std_20)

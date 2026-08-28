@@ -117,14 +117,30 @@ NgspiceWrapper::~NgspiceWrapper() {
 bool NgspiceWrapper::load_library() {
 #if MECHATRON_HAVE_NGSPICE
 #ifdef _WIN32
-    // Try to load libngspice-0.dll
+    // Resolve DLL search paths - MinGW dependencies must be findable
     std::vector<std::string> dll_paths = {
         m_library_path,
-        "C:\\Users\\Muhammed\\Downloads\\ngspice-38_dll_64\\Spice64_dll\\dll-mingw\\libngspice-0.dll",
         "libngspice-0.dll",
-        "./libngspice-0.dll",
-        "./ngspice.dll"
     };
+
+    // Add the directory of each candidate to DLL search path
+    for (const auto& path : dll_paths) {
+        if (path.empty()) continue;
+        std::filesystem::path p(path);
+        if (p.is_relative()) {
+            // Resolve relative to executable directory
+            wchar_t exe_buf[MAX_PATH];
+            GetModuleFileNameW(nullptr, exe_buf, MAX_PATH);
+            std::filesystem::path exe_dir = std::filesystem::path(exe_buf).parent_path();
+            p = exe_dir / path;
+        }
+        if (std::filesystem::exists(p)) {
+            std::string dir = p.parent_path().string();
+            SetDllDirectoryA(dir.c_str());
+            spdlog::debug("Set DLL search directory to: {}", dir);
+            break;
+        }
+    }
 
     for (const auto& path : dll_paths) {
         if (!path.empty()) {
@@ -135,6 +151,8 @@ bool NgspiceWrapper::load_library() {
             }
         }
     }
+
+    SetDllDirectoryA(nullptr);
 
     if (!m_library_handle) {
         m_error = "Failed to load libngspice-0.dll. Please install ngspice or set correct library path.";
@@ -1285,7 +1303,7 @@ std::string NetlistBuilder::build() const {
     for (size_t i = 0; i < m_models.size(); ++i) {
         const auto& model = m_models[i];
         spdlog::debug("[NetlistBuilder] Model {} ({} chars, starts with '{}', contains .ends: {})",
-                      i, model.length(), model.substr(0, std::min(size_t(20), model.length())),
+                      i, model.size(), model.substr(0, std::min(static_cast<size_t>(20), model.size())),
                       model.find(".ends") != std::string::npos);
         ss << model << "\n";
     }

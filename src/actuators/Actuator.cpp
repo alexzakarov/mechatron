@@ -16,6 +16,10 @@ SolenoidActuator::SolenoidActuator() {
 }
 
 float SolenoidActuator::calculate_force(float voltage) const {
+    // F = (N^2 * mu_0 * A) / (2 * (gap)^2) * I^2 simplified as proportional
+    float current = voltage / m_resistance;
+    float force = m_force_constant * current * current;
+    return force;
 }
 
 void SolenoidActuator::update(double dt) {

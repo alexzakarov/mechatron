@@ -5,6 +5,8 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+add_compile_definitions(NOMINMAX)
+
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # Output directories
@@ -76,11 +78,16 @@ if(MECHATRON_PLUGIN_MULTI_MAGNETIC)
     target_compile_definitions(mechatron_core PUBLIC MULTI_MAGNETIC_ENABLED=1)
 endif()
 
+# Instruments plugin (always enabled)
+add_subdirectory(src/plugins/instruments)
+target_compile_definitions(mechatron_core PUBLIC INSTRUMENT_ENABLED=1)
+
 # Support modules (non-plugin, legacy integration)
 add_subdirectory(src/physics)
 add_subdirectory(src/mcu)
 add_subdirectory(src/cad)
 add_subdirectory(src/electronics)
+add_subdirectory(src/io)
 add_subdirectory(src/sensors)
 add_subdirectory(src/actuators)
 add_subdirectory(src/control)

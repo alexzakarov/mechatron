@@ -33,3 +33,6 @@ add_dependencies(mechatron_core mechatron_actuators)
 target_link_libraries(mechatron_core PUBLIC mechatron_actuators)
 
 target_compile_features(mechatron_core PUBLIC cxx_std_20)
+
+# Instrument plugin dependency
+target_link_libraries(mechatron_core PUBLIC instrument_plugin_lib)

@@ -125,6 +125,7 @@ private:
     bool compile_sketch();
     bool upload_to_mcu(SimulationOrchestrator& orchestrator);
     bool check_arduino_cli();
+    void ensure_core_installed();
     std::string run_arduino_command(const std::vector<std::string>& args);
     std::string prepare_sketch_for_compile();
     std::string find_hex_file(const std::string& build_path, const std::string& sketch_name) const;
