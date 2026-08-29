@@ -10,6 +10,7 @@
 #include "core/Registry.hpp"
 #include "core/SimulationOrchestrator.hpp"
 #include <imgui.h>
+#include "Theme.hpp"
 #include <GL/glew.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -34,36 +35,24 @@ void Viewport3D::shutdown() {
 }
 
 void Viewport3D::render(Renderer& renderer, SimulationOrchestrator& orchestrator) {
-    // Store pointers for toolbar/input handlers
     m_renderer = &renderer;
     m_orchestrator = &orchestrator;
 
-    // Get total window size first
-    ImVec2 total_size = ImGui::GetContentRegionAvail();
-
-    // Reserve space for toolbar
-    float toolbar_height = 30.0f;
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4, 4));
-
-    // Render toolbar in reserved space
-    render_toolbar();
-
-    ImGui::PopStyleVar();
-
-    // Tab bar for Viewport3D, Circuit Editor, Model, Code Editor
     if (ImGui::BeginTabBar("CenterTabBar", ImGuiTabBarFlags_None)) {
-        if (ImGui::BeginTabItem("Viewport3D")) {
-            render_3d_viewport(renderer, orchestrator, total_size, toolbar_height);
-            ImGui::EndTabItem();
-        }
+        // Viewport3D deactivated - kept for future use
+        // if (ImGui::BeginTabItem("Viewport3D")) {
+        //     render_3d_viewport(renderer, orchestrator);
+        //     ImGui::EndTabItem();
+        // }
         if (ImGui::BeginTabItem("Circuit Editor")) {
             render_circuit_editor_tab(orchestrator);
             ImGui::EndTabItem();
         }
-        if (ImGui::BeginTabItem("Model")) {
-            render_model_editor_tab(orchestrator);
-            ImGui::EndTabItem();
-        }
+        // Model deactivated - kept for future use
+        // if (ImGui::BeginTabItem("Model")) {
+        //     render_model_editor_tab(orchestrator);
+        //     ImGui::EndTabItem();
+        // }
         if (ImGui::BeginTabItem("Code Editor")) {
             render_code_editor_tab(orchestrator);
             ImGui::EndTabItem();
@@ -107,10 +96,20 @@ void Viewport3D::render(Renderer& renderer, SimulationOrchestrator& orchestrator
     }
 }
 
-void Viewport3D::render_3d_viewport(Renderer& renderer, SimulationOrchestrator& orchestrator, ImVec2 total_size, float toolbar_height) {
-    // Calculate available size for 3D viewport (minus toolbar)
-    m_width = static_cast<int>(total_size.x);
-    m_height = static_cast<int>(total_size.y - toolbar_height - 10);  // -10 for padding
+void Viewport3D::render_3d_viewport(Renderer& renderer, SimulationOrchestrator& orchestrator) {
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4, 4));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4, 4));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, Theme::CurrentPalette().surface);
+    if (ImGui::BeginChild("Viewport3DToolbar", ImVec2(0, 32), true)) {
+        render_toolbar();
+    }
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar(2);
+
+    ImVec2 avail = ImGui::GetContentRegionAvail();
+    m_width = static_cast<int>(avail.x);
+    m_height = static_cast<int>(avail.y);
 
     // Store hover/focused state
     m_hovered = ImGui::IsWindowHovered();
@@ -223,10 +222,7 @@ void Viewport3D::render_model_editor_tab(SimulationOrchestrator& orchestrator) {
 }
 
 void Viewport3D::render_toolbar() {
-    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 4);
-    ImGui::SameLine(8);
-
-    // Reset camera
+    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 2);
     if (ImGui::Button("Reset Camera")) {
         if (m_renderer) {
             m_renderer->camera().reset();

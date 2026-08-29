@@ -8,6 +8,7 @@
 #include "electronics/CircuitComponentAdapter.hpp"
 #include "electronics/CircuitSimulator.hpp"
 #include "ui/SchematicSymbol.hpp"
+#include "ui/Theme.hpp"
 #include <imgui.h>
 #include <spdlog/spdlog.h>
 #include <algorithm>
@@ -1057,7 +1058,7 @@ void CircuitEditor::render_circuit_canvas() {
 
     // Grid
     const float grid_size = 20.0f;
-    ImU32 grid_color = ImGui::GetColorU32(ImVec4(0.3f, 0.3f, 0.3f, 0.3f));
+    ImU32 grid_color = Theme::U32(Theme::Semantic::Grid());
     for (float x = 0; x < canvas_size.x; x += grid_size) {
         draw_list->AddLine(ImVec2(canvas_pos.x + x, canvas_pos.y),
                           ImVec2(canvas_pos.x + x, canvas_pos.y + canvas_size.y), grid_color);
@@ -1070,9 +1071,9 @@ void CircuitEditor::render_circuit_canvas() {
     // Junction dots (where wires share the same pin)
     auto draw_junction_dot = [draw_list, canvas_pos](float x, float y, int wire_count) {
         if (wire_count < 2) return;
-        ImU32 dot_color = ImGui::GetColorU32(ImVec4(0.9f, 0.9f, 0.1f, 1.0f));
+        ImU32 dot_color = Theme::U32(Theme::Semantic::JunctionDot());
         draw_list->AddCircleFilled(ImVec2(x, y), 3.0f, dot_color);
-        draw_list->AddCircle(ImVec2(x, y), 3.0f, IM_COL32(255, 255, 255, 200), 12, 1.5f);
+        draw_list->AddCircle(ImVec2(x, y), 3.0f, Theme::U32(Theme::Semantic::JunctionOutline()), 12, 1.5f);
     };
 
     // Track pin connection counts for junction dots
@@ -1083,8 +1084,8 @@ void CircuitEditor::render_circuit_canvas() {
     }
 
     // Wires - Bezier curves
-    ImU32 wire_color = ImGui::GetColorU32(ImVec4(0.8f, 0.8f, 0.2f, 1.0f));
-    ImU32 wire_selected_color = ImGui::GetColorU32(ImVec4(1.0f, 0.5f, 0.3f, 1.0f));
+    ImU32 wire_color = Theme::U32(Theme::Semantic::Wire());
+    ImU32 wire_selected_color = Theme::U32(Theme::Semantic::WireSelected());
 
     for (size_t i = 0; i < m_wires.size(); ++i) {
         const auto& wire = m_wires[i];
@@ -1194,22 +1195,21 @@ void CircuitEditor::render_circuit_canvas() {
 
         if (container_enabled) {
             ImU32 bg_color = is_selected ?
-                ImGui::GetColorU32(ImVec4(0.3f, 0.5f, 0.7f, 0.8f)) :
-                ImGui::GetColorU32(ImVec4(0.2f, 0.2f, 0.2f, 0.9f));
+                Theme::U32(Theme::Semantic::NodeBgSelected()) :
+                Theme::U32(Theme::Semantic::NodeBg());
 
-            draw_list->AddRectFilled(node_pos, ImVec2(node_pos.x + node_width, node_pos.y + node_height), bg_color, container_radius);
+            draw_list->AddRectFilled(node_pos, ImVec2(node_pos.x + node_width, node_pos.y + node_height), bg_color, 8.0f);
             draw_list->AddRect(node_pos, ImVec2(node_pos.x + node_width, node_pos.y + node_height),
-                              is_selected ? IM_COL32(100, 200, 255, 255) : IM_COL32(255, 255, 255, 255),
-                              container_radius, 0, is_selected ? 2.5f : 1.5f);
+                              is_selected ? Theme::U32(Theme::Semantic::NodeBorderSelected()) : Theme::U32(Theme::Semantic::NodeBorder()),
+                              8.0f, 0, is_selected ? 2.5f : 1.5f);
         } else if (is_selected) {
-            // Frameless, but keep a subtle selection outline so it stays usable.
             draw_list->AddRect(node_pos, ImVec2(node_pos.x + node_width, node_pos.y + node_height),
-                              IM_COL32(100, 200, 255, 160), 3.0f, 0, 2.0f);
+                              Theme::U32(Theme::WithAlpha(Theme::CurrentPalette().primary, 0.63f)), 8.0f, 0, 2.0f);
         }
 
         // Label
         draw_list->AddText(ImVec2(node_pos.x + 5, node_pos.y + 5),
-                          IM_COL32(255, 255, 255, 255), node.type.c_str());
+                          Theme::U32(Theme::Semantic::Label()), node.type.c_str());
 
         // Schematic symbol render (if available). If missing, keep the legacy pin layout.
         auto sym_to_canvas = [&](float sx, float sy) -> ImVec2 {
@@ -1230,9 +1230,9 @@ void CircuitEditor::render_circuit_canvas() {
                 ImVec2 a = sym_to_canvas(p.x1, p.y1);
                 ImVec2 b = sym_to_canvas(p.x2, p.y2);
                 if (p.type == SchematicSymbolPrimitive::Type::Rect) {
-                    draw_list->AddRect(a, b, IM_COL32(230, 230, 230, 220), 2.0f, 0, p.thickness);
+                    draw_list->AddRect(a, b, Theme::U32(Theme::Semantic::SchematicBody()), 2.0f, 0, p.thickness);
                 } else {
-                    draw_list->AddLine(a, b, IM_COL32(230, 230, 230, 220), p.thickness);
+                    draw_list->AddLine(a, b, Theme::U32(Theme::Semantic::SchematicBody()), p.thickness);
                 }
             }
         }
@@ -1343,16 +1343,15 @@ void CircuitEditor::render_circuit_canvas() {
                 m_symbol_state->drag_point = -1;
             }
 
-            // overlay: highlight pins and endpoints when editing
             for (const auto& [name, pt] : m_symbol_state->sym.pins) {
                 ImVec2 p = sym_to_canvas(pt.first, pt.second);
-                draw_list->AddCircle(p, 8.0f, IM_COL32(255, 255, 255, 90), 12, 1.5f);
+                draw_list->AddCircle(p, 8.0f, Theme::U32(Theme::WithAlpha(Theme::CurrentPalette().text, 0.35f)), 12, 1.5f);
             }
             for (int pi = 0; pi < (int)m_symbol_state->sym.body.size(); ++pi) {
                 const auto& pr = m_symbol_state->sym.body[pi];
                 ImVec2 p0 = sym_to_canvas(pr.x1, pr.y1);
                 ImVec2 p1 = sym_to_canvas(pr.x2, pr.y2);
-                ImU32 col = (pi == m_symbol_state->selected_prim) ? IM_COL32(120, 220, 255, 200) : IM_COL32(255, 255, 255, 90);
+                ImU32 col = (pi == m_symbol_state->selected_prim) ? Theme::U32(Theme::WithAlpha(Theme::CurrentPalette().primary, 0.78f)) : Theme::U32(Theme::WithAlpha(Theme::CurrentPalette().text, 0.35f));
                 draw_list->AddCircleFilled(p0, 3.5f, col);
                 draw_list->AddCircleFilled(p1, 3.5f, col);
             }
@@ -1382,14 +1381,13 @@ void CircuitEditor::render_circuit_canvas() {
             is_hovered_pin = (dist < 8.0f);
 
             ImU32 pin_color = is_hovered_pin ?
-                IM_COL32(255, 255, 150, 255) :
-                IM_COL32(255, 200, 100, 255);
+                Theme::U32(Theme::Semantic::PinHover()) :
+                Theme::U32(Theme::Semantic::PinIdle());
             draw_list->AddCircleFilled(ImVec2(pin_x, pin_y), pin_radius, pin_color);
-            draw_list->AddCircle(ImVec2(pin_x, pin_y), pin_radius, IM_COL32(255, 255, 255, 200), 12, 1.0f);
+            draw_list->AddCircle(ImVec2(pin_x, pin_y), pin_radius, Theme::U32(Theme::Semantic::PinOutline()), 12, 1.0f);
 
-            // Pin label
             draw_list->AddText(ImVec2(pin_x + 8, pin_y - 5),
-                              IM_COL32(220, 220, 220, 255), pin.name.c_str());
+                              Theme::U32(Theme::Semantic::PinLabel()), pin.name.c_str());
 
             input_idx++;
         }
@@ -1418,15 +1416,14 @@ void CircuitEditor::render_circuit_canvas() {
             is_hovered_pin = (dist < 8.0f);
 
             ImU32 pin_color = is_hovered_pin ?
-                IM_COL32(150, 255, 255, 255) :
-                IM_COL32(100, 200, 255, 255);
+                Theme::U32(Theme::Semantic::PinHover()) :
+                Theme::U32(Theme::Semantic::PinIdle());
             draw_list->AddCircleFilled(ImVec2(pin_x, pin_y), pin_radius, pin_color);
-            draw_list->AddCircle(ImVec2(pin_x, pin_y), pin_radius, IM_COL32(255, 255, 255, 200), 12, 1.0f);
+            draw_list->AddCircle(ImVec2(pin_x, pin_y), pin_radius, Theme::U32(Theme::Semantic::PinOutline()), 12, 1.0f);
 
-            // Pin label (right-aligned)
             float text_width = ImGui::CalcTextSize(pin.name.c_str()).x;
             draw_list->AddText(ImVec2(pin_x - 8 - text_width, pin_y - 5),
-                              IM_COL32(220, 220, 220, 255), pin.name.c_str());
+                              Theme::U32(Theme::Semantic::PinLabel()), pin.name.c_str());
 
             output_idx++;
         }
@@ -1454,7 +1451,7 @@ void CircuitEditor::render_circuit_canvas() {
             ImGui::Separator();
 
             // Show UID
-            ImGui::TextColored(ImVec4(0.5f, 0.8f, 1.0f, 1.0f), "UID: %s",
+            ImGui::TextColored(Theme::CurrentPalette().primaryHover, "UID: %s",
                 wire.uid.empty() ? "(EMPTY)" : wire.uid.c_str());
 
             ImGui::Spacing();
@@ -1466,7 +1463,7 @@ void CircuitEditor::render_circuit_canvas() {
             // Show current flow information
             if (m_orchestrator) {
                 ImGui::Separator();
-                ImGui::TextColored(ImVec4(0.6f, 0.6f, 1.0f, 1.0f), "Current Flow");
+                ImGui::TextColored(Theme::CurrentPalette().primaryHover, "Current Flow");
 
                 // Get source and target components
                 Component* src_comp = m_orchestrator->registry().get(wire.from_node);
@@ -1628,7 +1625,7 @@ void CircuitEditor::render_circuit_canvas() {
                         } else {
                             current_str = std::to_string(current_a) + " A";
                         }
-                        ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.5f, 1.0f), "Terminal Current: %s", current_str.c_str());
+                        ImGui::TextColored(Theme::CurrentPalette().success, "Terminal Current: %s", current_str.c_str());
                         if (!current_source_label.empty()) {
                             ImGui::TextDisabled("Source: %s", current_source_label.c_str());
                         }
@@ -1733,7 +1730,7 @@ void CircuitEditor::render_symbol_editor() {
         }
     }
 
-    ImGui::TextColored(ImVec4(0.7f, 0.9f, 1.0f, 1.0f), "Symbol Editor");
+    ImGui::TextColored(Theme::CurrentPalette().primaryHover, "Symbol Editor");
     ImGui::SameLine();
     ImGui::TextDisabled("(Type: %s)", type.c_str());
     ImGui::SameLine();
@@ -1823,7 +1820,7 @@ void CircuitEditor::render_symbol_editor() {
     // Frame
     ImVec2 a0 = to_canvas(0, 0);
     ImVec2 a1 = to_canvas(m_symbol_state->sym.width, m_symbol_state->sym.height);
-    dl->AddRect(a0, a1, IM_COL32(255, 255, 255, 60), 2.0f);
+    dl->AddRect(a0, a1, Theme::U32(Theme::WithAlpha(Theme::CurrentPalette().border, 0.24f)), 2.0f);
 
     auto dist2 = [](ImVec2 a, ImVec2 b) {
         const float dx = a.x - b.x;
@@ -1915,7 +1912,7 @@ void CircuitEditor::render_symbol_editor() {
         ImVec2 p0 = to_canvas(p.x1, p.y1);
         ImVec2 p1 = to_canvas(p.x2, p.y2);
         const bool sel = (i == m_symbol_state->selected_prim);
-        const ImU32 col = sel ? IM_COL32(120, 220, 255, 240) : IM_COL32(230, 230, 230, 220);
+        const ImU32 col = sel ? Theme::U32(Theme::WithAlpha(Theme::CurrentPalette().primary, 0.94f)) : Theme::U32(Theme::WithAlpha(Theme::CurrentPalette().textDim, 0.86f));
         if (p.type == SchematicSymbolPrimitive::Type::Rect) dl->AddRect(p0, p1, col, 2.0f, 0, p.thickness);
         else dl->AddLine(p0, p1, col, p.thickness);
         dl->AddCircleFilled(p0, 3.5f, col);
@@ -1925,9 +1922,9 @@ void CircuitEditor::render_symbol_editor() {
     // Draw pins
     for (const auto& [name, pt] : m_symbol_state->sym.pins) {
         ImVec2 p = to_canvas(pt.first, pt.second);
-        dl->AddCircleFilled(p, 5.0f, IM_COL32(255, 200, 100, 255));
-        dl->AddCircle(p, 5.0f, IM_COL32(255, 255, 255, 200), 12, 1.0f);
-        dl->AddText(ImVec2(p.x + 7, p.y - 7), IM_COL32(255, 255, 255, 220), name.c_str());
+        dl->AddCircleFilled(p, 5.0f, Theme::U32(Theme::Semantic::PinIdle()));
+        dl->AddCircle(p, 5.0f, Theme::U32(Theme::Semantic::PinOutline()), 12, 1.0f);
+        dl->AddText(ImVec2(p.x + 7, p.y - 7), Theme::U32(Theme::WithAlpha(Theme::CurrentPalette().text, 0.86f)), name.c_str());
     }
 
     ImGui::EndChild();
@@ -1945,16 +1942,16 @@ void CircuitEditor::render_properties_panel() {
 
         // Show UID (with debug info if empty)
         if (wire.uid.empty()) {
-            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "UID: (EMPTY - BUG!)");
+            ImGui::TextColored(Theme::CurrentPalette().error, "UID: (EMPTY - BUG!)");
         } else {
-            ImGui::TextColored(ImVec4(0.5f, 0.8f, 1.0f, 1.0f), "UID: %s", wire.uid.c_str());
+            ImGui::TextColored(Theme::CurrentPalette().primaryHover, "UID: %s", wire.uid.c_str());
         }
 
         ImGui::Spacing();
         ImGui::Text("From: %s[%s]", wire.from_node.c_str(), wire.from_pin_name.c_str());
         ImGui::Text("To:   %s[%s]", wire.to_node.c_str(), wire.to_pin_name.c_str());
         ImGui::Spacing();
-        ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "Press Delete to remove wire");
+        ImGui::TextColored(Theme::CurrentPalette().error, "Press Delete to remove wire");
         return;
     }
 
@@ -1975,7 +1972,7 @@ void CircuitEditor::render_properties_panel() {
         Component* comp = m_orchestrator->registry().get(node.id);
         if (comp) {
             // 3D Transform
-            ImGui::TextColored(ImVec4(0.6f, 0.6f, 1.0f, 1.0f), "3D Transform");
+            ImGui::TextColored(Theme::CurrentPalette().primaryHover, "3D Transform");
             auto& t = comp->transform();
             ImGui::Indent();
             ImGui::DragFloat3("Position##3d", &t.position.x, 0.1f);
@@ -1992,7 +1989,7 @@ void CircuitEditor::render_properties_panel() {
                 if (auto* motor = TRY_CAST(DCMotor)) {
                     float input_voltage = motor->get_input_voltage();
 
-                    ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f), "Runtime Data");
+                    ImGui::TextColored(Theme::CurrentPalette().warning, "Runtime Data");
                     ImGui::Indent();
                     ImGui::Text("RPM: %.1f", motor->get_rpm());
                     ImGui::Text("Angular Velocity: %.2f rad/s", motor->get_angular_velocity());
@@ -2005,30 +2002,30 @@ void CircuitEditor::render_properties_panel() {
 
                     ImGui::Text("Enabled: %s", motor->is_enabled() ? "Yes" : "No");
                     ImGui::Separator();
-                    ImGui::TextColored(ImVec4(0.6f, 0.6f, 1.0f, 1.0f), "Parameters");
+                    ImGui::TextColored(Theme::CurrentPalette().primaryHover, "Parameters");
                     ImGui::Text("Voltage Rating: %.1f V", motor->get_voltage_rating());
                     ImGui::Text("No-Load RPM: %.0f", motor->get_no_load_speed());
                     ImGui::Text("Stall Torque: %.2f Nm", motor->get_stall_torque());
                     ImGui::Unindent();
                 } else if (auto* sol = TRY_CAST(SolenoidActuator)) {
-                    ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f), "Runtime Data");
+                    ImGui::TextColored(Theme::CurrentPalette().warning, "Runtime Data");
                     ImGui::Indent();
                     ImGui::Text("Position: %.2f", sol->get_position());
                     ImGui::Text("Enabled: %s", sol->is_enabled() ? "Yes" : "No");
                     ImGui::Text("Input: %.2f", sol->get_input());
                     ImGui::Separator();
-                    ImGui::TextColored(ImVec4(0.6f, 0.6f, 1.0f, 1.0f), "Parameters");
+                    ImGui::TextColored(Theme::CurrentPalette().primaryHover, "Parameters");
                     ImGui::Text("Resistance: %.1f Ohm", 12.0f);
                     ImGui::Text("Inductance: %.2f H", 0.5f);
                     ImGui::Text("Stroke: %.1f mm", 10.0f);
                     ImGui::Unindent();
                 } else if (auto* servo = TRY_CAST(ServoMotor)) {
-                    ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f), "Runtime Data");
+                    ImGui::TextColored(Theme::CurrentPalette().warning, "Runtime Data");
                     ImGui::Indent();
                     ImGui::Text("Current Angle: %.1f deg", servo->get_current_angle());
                     ImGui::Text("Enabled: %s", servo->is_enabled() ? "Yes" : "No");
                     ImGui::Separator();
-                    ImGui::TextColored(ImVec4(0.6f, 0.6f, 1.0f, 1.0f), "Parameters");
+                    ImGui::TextColored(Theme::CurrentPalette().primaryHover, "Parameters");
                     ImGui::Text("Min Angle: %.0f deg", 0.0f);
                     ImGui::Text("Max Angle: %.0f deg", 180.0f);
                     ImGui::Text("Max Speed: %.0f deg/s", 300.0f);
@@ -2038,7 +2035,7 @@ void CircuitEditor::render_properties_panel() {
             // ---- SENSORS ----
             else if (cat == "sensor") {
                 if (auto* prox = TRY_CAST(ProximitySensor)) {
-                    ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.5f, 1.0f), "Runtime Data");
+                    ImGui::TextColored(Theme::CurrentPalette().success, "Runtime Data");
                     ImGui::Indent();
                     ImGui::Text("Distance: %.3f m", prox->get_distance());
                     ImGui::Text("Voltage Out: %.2f V", prox->read());
@@ -2046,13 +2043,13 @@ void CircuitEditor::render_properties_panel() {
                     ImGui::Text("FOV: %.0f deg", 30.0f);
                     ImGui::Unindent();
                 } else if (auto* ls = TRY_CAST(LimitSwitch)) {
-                    ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.5f, 1.0f), "Runtime Data");
+                    ImGui::TextColored(Theme::CurrentPalette().success, "Runtime Data");
                     ImGui::Indent();
                     ImGui::Text("Triggered: %s", ls->is_triggered() ? "Yes" : "No");
                     ImGui::Text("Output: %.1f V", ls->read());
                     ImGui::Unindent();
                 } else if (auto* enc = TRY_CAST(RotaryEncoder)) {
-                    ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.5f, 1.0f), "Runtime Data");
+                    ImGui::TextColored(Theme::CurrentPalette().success, "Runtime Data");
                     ImGui::Indent();
                     ImGui::Text("Angle: %.1f deg", enc->get_angle_degrees());
                     ImGui::Text("Angle: %.3f rad", enc->get_angle_radians());
@@ -2061,7 +2058,7 @@ void CircuitEditor::render_properties_panel() {
                     ImGui::Text("Resolution: %d PPR", 360);
                     ImGui::Unindent();
                 } else if (auto* pot = TRY_CAST(Potentiometer)) {
-                    ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.5f, 1.0f), "Runtime Data");
+                    ImGui::TextColored(Theme::CurrentPalette().success, "Runtime Data");
                     ImGui::Indent();
                     ImGui::Text("Angle: %.1f deg", pot->get_angle());
                     ImGui::Text("Voltage Out: %.2f V", pot->read());
@@ -2071,25 +2068,25 @@ void CircuitEditor::render_properties_panel() {
             // ---- PASSIVE (Resistor, Capacitor, Inductor) ----
             else if (cat == "passive") {
                 if (ctype == "resistor") {
-                    ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.3f, 1.0f), "Parameters");
+                    ImGui::TextColored(Theme::CurrentPalette().warning, "Parameters");
                     ImGui::Indent();
                     ImGui::Text("Resistance: 1000 Ohm");
                     ImGui::Text("Type: Passive");
                     ImGui::Unindent();
                 } else if (ctype == "capacitor") {
-                    ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.3f, 1.0f), "Parameters");
+                    ImGui::TextColored(Theme::CurrentPalette().warning, "Parameters");
                     ImGui::Indent();
                     ImGui::Text("Capacitance: 1 uF");
                     ImGui::Text("Type: Passive");
                     ImGui::Unindent();
                 } else if (ctype == "inductor") {
-                    ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.3f, 1.0f), "Parameters");
+                    ImGui::TextColored(Theme::CurrentPalette().warning, "Parameters");
                     ImGui::Indent();
                     ImGui::Text("Inductance: 1 mH");
                     ImGui::Text("Type: Passive");
                     ImGui::Unindent();
                 } else if (ctype == "ground") {
-                    ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.2f, 1.0f), "Ground Reference");
+                    ImGui::TextColored(Theme::CurrentPalette().warning, "Ground Reference");
                     ImGui::Indent();
                     ImGui::Text("Voltage: 0.00 V");
                     ImGui::Text("Type: Ground");
@@ -2099,28 +2096,28 @@ void CircuitEditor::render_properties_panel() {
             // ---- SEMICONDUCTOR ----
             else if (cat == "semiconductor") {
                 if (ctype == "diode" || ctype == "led") {
-                    ImGui::TextColored(ImVec4(0.6f, 1.0f, 0.6f, 1.0f), "Runtime Data");
+                    ImGui::TextColored(Theme::CurrentPalette().success, "Runtime Data");
                     ImGui::Indent();
                     ImGui::Text("Type: %s", ctype == "led" ? "LED" : "Diode");
                     ImGui::Text("Forward Voltage: 0.7 V");
                     ImGui::Text("Type: Semiconductor");
                     ImGui::Unindent();
                 } else if (ctype == "bjt_npn" || ctype == "bjt_pnp") {
-                    ImGui::TextColored(ImVec4(0.6f, 1.0f, 0.6f, 1.0f), "Runtime Data");
+                    ImGui::TextColored(Theme::CurrentPalette().success, "Runtime Data");
                     ImGui::Indent();
                     ImGui::Text("Type: %s", ctype == "bjt_npn" ? "NPN" : "PNP");
                     ImGui::Text("Beta: 100");
                     ImGui::Text("Type: BJT Transistor");
                     ImGui::Unindent();
                 } else if (ctype == "mosfet_n" || ctype == "mosfet_p") {
-                    ImGui::TextColored(ImVec4(0.6f, 1.0f, 0.6f, 1.0f), "Runtime Data");
+                    ImGui::TextColored(Theme::CurrentPalette().success, "Runtime Data");
                     ImGui::Indent();
                     ImGui::Text("Type: %s", ctype == "mosfet_n" ? "N-Channel" : "P-Channel");
                     ImGui::Text("Threshold: 2.0 V");
                     ImGui::Text("Type: MOSFET");
                     ImGui::Unindent();
                 } else if (ctype == "zener_diode") {
-                    ImGui::TextColored(ImVec4(0.6f, 1.0f, 0.6f, 1.0f), "Runtime Data");
+                    ImGui::TextColored(Theme::CurrentPalette().success, "Runtime Data");
                     ImGui::Indent();
                     ImGui::Text("Zener Voltage: 3.3 V");
                     ImGui::Text("Type: Zener Diode");
@@ -2130,7 +2127,7 @@ void CircuitEditor::render_properties_panel() {
             // ---- POWER ----
             else if (cat == "power") {
                 if (ctype == "dc_voltage") {
-                    ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.5f, 1.0f), "DC Voltage Source");
+                    ImGui::TextColored(Theme::CurrentPalette().error, "DC Voltage Source");
                     ImGui::Indent();
 
                     // Read current voltage from component
@@ -2153,14 +2150,14 @@ void CircuitEditor::render_properties_panel() {
                     ImGui::Text("Range: 0V - 48V");
                     ImGui::Unindent();
                 } else if (ctype == "h_bridge") {
-                    ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.5f, 1.0f), "Runtime Data");
+                    ImGui::TextColored(Theme::CurrentPalette().error, "Runtime Data");
                     ImGui::Indent();
                     ImGui::Text("Supply Voltage: 12.0 V");
                     ImGui::Text("PWM Frequency: 1000 Hz");
                     ImGui::Text("Type: H-Bridge Motor Driver");
                     ImGui::Unindent();
                 } else if (ctype == "buck_converter") {
-                    ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.5f, 1.0f), "Runtime Data");
+                    ImGui::TextColored(Theme::CurrentPalette().error, "Runtime Data");
                     ImGui::Indent();
                     float input_voltage = 0.0f;
                     float duty_cycle = 0.0f;
@@ -2178,14 +2175,14 @@ void CircuitEditor::render_properties_panel() {
                     ImGui::Text("Type: Buck Converter");
                     ImGui::Unindent();
                 } else if (ctype == "boost_converter") {
-                    ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.5f, 1.0f), "Runtime Data");
+                    ImGui::TextColored(Theme::CurrentPalette().error, "Runtime Data");
                     ImGui::Indent();
                     ImGui::Text("Input Voltage: 5.0 V");
                     ImGui::Text("Duty Cycle: 50%%");
                     ImGui::Text("Type: Boost Converter");
                     ImGui::Unindent();
                 } else if (ctype == "motor_driver") {
-                    ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.5f, 1.0f), "Runtime Data");
+                    ImGui::TextColored(Theme::CurrentPalette().error, "Runtime Data");
                     ImGui::Indent();
                     ImGui::Text("Supply Voltage: 12.0 V");
                     ImGui::Text("Type: Motor Driver");
@@ -2194,7 +2191,7 @@ void CircuitEditor::render_properties_panel() {
             }
             // ---- MCU ----
             else if (cat == "mcu") {
-                ImGui::TextColored(ImVec4(0.8f, 0.6f, 1.0f, 1.0f), "MCU");
+                ImGui::TextColored(Theme::CurrentPalette().primaryHover, "MCU");
                 ImGui::Indent();
                 ImGui::Text("Type: %s", node.type.c_str());
                 ImGui::Text("Status: Ready");
@@ -2202,7 +2199,7 @@ void CircuitEditor::render_properties_panel() {
             }
             // ---- CONTROL ----
             else if (cat == "control") {
-                ImGui::TextColored(ImVec4(0.5f, 0.8f, 1.0f, 1.0f), "Controller");
+                ImGui::TextColored(Theme::CurrentPalette().primaryHover, "Controller");
                 ImGui::Indent();
                 ImGui::Text("Type: %s", node.type.c_str());
                 ImGui::Unindent();
@@ -2210,7 +2207,7 @@ void CircuitEditor::render_properties_panel() {
 
             // Ports with Current Flow
             ImGui::Separator();
-            ImGui::TextColored(ImVec4(0.6f, 0.6f, 1.0f, 1.0f), "Pin Voltages & Currents");
+            ImGui::TextColored(Theme::CurrentPalette().primaryHover, "Pin Voltages & Currents");
             ImGui::Indent();
             auto ports = comp->get_ports();
             if (ports.empty()) {

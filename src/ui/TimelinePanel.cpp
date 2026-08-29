@@ -1,6 +1,7 @@
 #include "TimelinePanel.hpp"
 #include "SimulationOrchestrator.hpp"
 #include <imgui.h>
+#include "Theme.hpp"
 #include <cstdio>
 
 namespace mechatron {
@@ -82,7 +83,7 @@ void TimelinePanel::render(SimulationOrchestrator& orchestrator) {
 
     // Timeline bar
     float avail = ImGui::GetContentRegionAvail().x;
-    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.15f, 0.15f, 0.15f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, Theme::CurrentPalette().surface);
     ImGui::BeginChild("TimelineBar", ImVec2(avail, 40), true);
 
     // Draw tick marks
@@ -93,16 +94,16 @@ void TimelinePanel::render(SimulationOrchestrator& orchestrator) {
     // 1 second divisions
     for (int i = 0; i <= 10; ++i) {
         float x = p.x + 5 + (bar_width * i / 10.0f);
-        dl->AddLine(ImVec2(x, p.y), ImVec2(x, p.y + 30), IM_COL32(100, 100, 100, 255));
+        dl->AddLine(ImVec2(x, p.y), ImVec2(x, p.y + 30), Theme::U32(Theme::CurrentPalette().textDisabled));
         char label[16];
         std::snprintf(label, sizeof(label), "%ds", i);
-        dl->AddText(ImVec2(x + 2, p.y + 15), IM_COL32(150, 150, 150, 255), label);
+        dl->AddText(ImVec2(x + 2, p.y + 15), Theme::U32(Theme::WithAlpha(Theme::CurrentPalette().textDim, 0.78f)), label);
     }
 
     // Current time marker
     float progress = std::fmod(sim_time, 10.0) / 10.0f;
     float marker_x = p.x + 5 + bar_width * progress;
-    dl->AddLine(ImVec2(marker_x, p.y), ImVec2(marker_x, p.y + 30), IM_COL32(0, 200, 100, 255), 2.0f);
+    dl->AddLine(ImVec2(marker_x, p.y), ImVec2(marker_x, p.y + 30), Theme::U32(Theme::CurrentPalette().primary), 2.0f);
 
     ImGui::EndChild();
     ImGui::PopStyleColor();

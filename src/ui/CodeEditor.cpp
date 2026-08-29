@@ -2,6 +2,7 @@
 #include "core/SimulationOrchestrator.hpp"
 #include "core/Registry.hpp"
 #include <imgui.h>
+#include "Theme.hpp"
 #include <imgui_internal.h>
 #include <spdlog/spdlog.h>
 #include <fstream>
@@ -203,7 +204,7 @@ void CodeEditor::render(SimulationOrchestrator& orchestrator) {
         ImGui::Separator();
         if (ImGui::CollapsingHeader("Compilation Output", ImGuiTreeNodeFlags_DefaultOpen)) {
             if (!m_compile_errors.empty()) {
-                ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(255, 100, 100, 255));
+                ImGui::PushStyleColor(ImGuiCol_Text, Theme::U32(Theme::WithAlpha(Theme::CurrentPalette().error, 1.0f)));
                 ImGui::TextWrapped("%s", m_compile_errors.c_str());
                 ImGui::PopStyleColor();
             }
@@ -562,7 +563,7 @@ void CodeEditor::update_syntax_highlighting() {
                         HighlightRange hr;
                         hr.start = token_start;
                         hr.end = pos;
-                        hr.color = IM_COL32(150, 150, 255, 255);
+                        hr.color = Theme::U32(Theme::CurrentPalette().primaryHover);
                         m_highlight_ranges.push_back(hr);
                         break;
                     }
@@ -574,7 +575,7 @@ void CodeEditor::update_syntax_highlighting() {
                         HighlightRange hr;
                         hr.start = token_start;
                         hr.end = pos;
-                        hr.color = IM_COL32(100, 200, 100, 255);
+                        hr.color = Theme::U32(Theme::CurrentPalette().success);
                         m_highlight_ranges.push_back(hr);
                         break;
                     }
@@ -586,7 +587,7 @@ void CodeEditor::update_syntax_highlighting() {
                         HighlightRange hr;
                         hr.start = token_start;
                         hr.end = pos;
-                        hr.color = IM_COL32(255, 100, 100, 255);
+                        hr.color = Theme::U32(Theme::WithAlpha(Theme::CurrentPalette().error, 1.0f));
                         m_highlight_ranges.push_back(hr);
                         break;
                     }
@@ -602,17 +603,17 @@ void CodeEditor::update_syntax_highlighting() {
 ImU32 CodeEditor::get_color_for_token(const std::string& token) {
     // Keywords: blue/purple
     for (const char** kw = s_keywords; *kw; ++kw) {
-        if (token == *kw) return IM_COL32(150, 150, 255, 255);
+        if (token == *kw) return Theme::U32(Theme::CurrentPalette().primaryHover);
     }
     // Types/functions: green
     for (const char** kw = s_types; *kw; ++kw) {
-        if (token == *kw) return IM_COL32(100, 200, 100, 255);
+        if (token == *kw) return Theme::U32(Theme::CurrentPalette().success);
     }
     // Constants: red/orange
     for (const char** kw = s_constants; *kw; ++kw) {
-        if (token == *kw) return IM_COL32(255, 100, 100, 255);
+        if (token == *kw) return Theme::U32(Theme::WithAlpha(Theme::CurrentPalette().error, 1.0f));
     }
-    return IM_COL32(255, 255, 255, 255);
+    return Theme::U32(Theme::CurrentPalette().text);
 }
 
 void CodeEditor::update_cursor_from_index(size_t cursor_index) {

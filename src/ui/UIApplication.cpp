@@ -8,6 +8,7 @@
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
 #include <spdlog/spdlog.h>
+#include "Theme.hpp"
 
 namespace mechatron {
 
@@ -50,6 +51,7 @@ bool UIApplication::init() {
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
     ImGui::StyleColorsDark();
+    Theme::ApplyModernDark();
 
     ImGui_ImplGlfw_InitForOpenGL(m_window, true);
     ImGui_ImplOpenGL3_Init("#version 330");
@@ -258,7 +260,10 @@ void UIApplication::run() {
 
         // Main viewport clear (behind ImGui)
         glViewport(0, 0, display_w, display_h);
-        glClearColor(0.05f, 0.05f, 0.07f, 1.0f);
+        {
+            const auto& bg = Theme::CurrentPalette().bg;
+            glClearColor(bg.x, bg.y, bg.z, 1.0f);
+        }
         glClear(GL_COLOR_BUFFER_BIT);
 
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
@@ -417,8 +422,8 @@ bool UIApplication::render_splitter_v(float* size, float min_size, float max_siz
 
 bool UIApplication::render_splitter_h(float* size, float min_size, float max_size, float width) {
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.4f, 0.4f, 0.4f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, Theme::CurrentPalette().surfaceHover);
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, Theme::CurrentPalette().primaryActive);
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
 
     float button_height = 4.0f;

@@ -3,6 +3,7 @@
 #include "core/Registry.hpp"
 #include "plugins/instruments/InstrumentPlugin.hpp"
 #include <imgui.h>
+#include "Theme.hpp"
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -260,11 +261,11 @@ void OscilloscopePanel::render(SimulationOrchestrator& orchestrator) {
 
     // Background
     draw_list->AddRectFilled(cursor, ImVec2(cursor.x + wave_width, cursor.y + wave_height),
-                             IM_COL32(10, 10, 30, 255));
+                             Theme::U32(Theme::CurrentPalette().bg));
 
     // Grid: 10 columns x 8 rows (standard oscilloscope layout)
-    ImU32 grid_color = IM_COL32(40, 40, 60, 255);
-    ImU32 grid_color_center = IM_COL32(60, 60, 80, 255);
+    ImU32 grid_color = Theme::U32(Theme::CurrentPalette().border);
+    ImU32 grid_color_center = Theme::U32(Theme::CurrentPalette().borderStrong);
 
     for (int i = 0; i <= 10; ++i) {
         float x = cursor.x + (wave_width * i) / 10.0f;
@@ -279,7 +280,7 @@ void OscilloscopePanel::render(SimulationOrchestrator& orchestrator) {
 
     // Border
     draw_list->AddRect(cursor, ImVec2(cursor.x + wave_width, cursor.y + wave_height),
-                       IM_COL32(80, 80, 100, 255));
+                       Theme::U32(Theme::CurrentPalette().borderStrong));
 
     // Trigger level indicator (horizontal dashed line)
     if (m_trigger_enabled) {
@@ -287,7 +288,7 @@ void OscilloscopePanel::render(SimulationOrchestrator& orchestrator) {
         const float v_center = 0.5f * v_full + m_v_offset;
         const float ny = clampf(0.5f - (m_trigger_level - v_center) / v_full, 0.0f, 1.0f);
         const float y = cursor.y + ny * wave_height;
-        const ImU32 trig_col = IM_COL32(255, 255, 255, 90);
+        const ImU32 trig_col = Theme::U32(Theme::WithAlpha(Theme::CurrentPalette().text, 0.35f));
         const float dash = 6.0f;
         for (float x = cursor.x; x < cursor.x + wave_width; x += dash * 2.0f) {
             draw_list->AddLine(ImVec2(x, y), ImVec2(std::min(x + dash, cursor.x + wave_width), y), trig_col);
@@ -384,7 +385,7 @@ void OscilloscopePanel::render(SimulationOrchestrator& orchestrator) {
         const double t1 = std::clamp(m_cursor_t1, t_start, t_end);
         const float x0 = cursor.x + static_cast<float>((t0 - t_start) / m_time_scale) * wave_width;
         const float x1 = cursor.x + static_cast<float>((t1 - t_start) / m_time_scale) * wave_width;
-        const ImU32 cur_col = IM_COL32(220, 220, 220, 160);
+        const ImU32 cur_col = Theme::U32(Theme::WithAlpha(Theme::CurrentPalette().textDim, 0.63f));
         draw_list->AddLine(ImVec2(x0, cursor.y), ImVec2(x0, cursor.y + wave_height), cur_col, 1.0f);
         draw_list->AddLine(ImVec2(x1, cursor.y), ImVec2(x1, cursor.y + wave_height), cur_col, 1.0f);
 
@@ -408,15 +409,15 @@ void OscilloscopePanel::render(SimulationOrchestrator& orchestrator) {
         char buf[128];
         std::snprintf(buf, sizeof(buf), "dT=%.6fs", dt);
         draw_list->AddText(ImVec2(cursor.x + 4, cursor.y + wave_height - 18),
-                           IM_COL32(220, 220, 220, 200), buf);
+                           Theme::U32(Theme::WithAlpha(Theme::CurrentPalette().text, 0.78f)), buf);
     }
 
     // Time/Voltage labels
     draw_list->AddText(ImVec2(cursor.x + 4, cursor.y + 2),
-                       IM_COL32(200, 200, 200, 200),
+                       Theme::U32(Theme::WithAlpha(Theme::CurrentPalette().textDim, 0.78f)),
                        (std::to_string(m_volts_per_div) + "V/div").c_str());
     draw_list->AddText(ImVec2(cursor.x + wave_width - 60, cursor.y + 2),
-                       IM_COL32(200, 200, 200, 200),
+                       Theme::U32(Theme::WithAlpha(Theme::CurrentPalette().textDim, 0.78f)),
                        (std::to_string(static_cast<float>(m_time_scale)) + "s").c_str());
 
     if (meas.ok) {
@@ -426,7 +427,7 @@ void OscilloscopePanel::render(SimulationOrchestrator& orchestrator) {
                       meas.vmin, meas.vmax, meas.vavg, meas.vrms,
                       meas.freq_hz, meas.duty * 100.0);
         draw_list->AddText(ImVec2(cursor.x + 4, cursor.y + 18),
-                           IM_COL32(200, 200, 200, 220), mbuf);
+                           Theme::U32(Theme::WithAlpha(Theme::CurrentPalette().textDim, 0.86f)), mbuf);
     }
 }
 

@@ -1,6 +1,7 @@
 #include "SerialMonitor.hpp"
 #include "core/SimulationOrchestrator.hpp"
 #include <imgui.h>
+#include "Theme.hpp"
 #include <spdlog/spdlog.h>
 #include <chrono>
 #include <iomanip>
@@ -84,9 +85,9 @@ void SerialMonitor::render(SimulationOrchestrator& orchestrator) {
 
     // Connection status bar
     if (m_connected) {
-        ImGui::TextColored(ImVec4(0, 1, 0, 1), "[CONNECTED] %s @ %d baud", m_port.c_str(), m_baud_rate);
+        ImGui::TextColored(Theme::CurrentPalette().success, "[CONNECTED] %s @ %d baud", m_port.c_str(), m_baud_rate);
     } else {
-        ImGui::TextColored(ImVec4(1, 0, 0, 1), "[DISCONNECTED]");
+        ImGui::TextColored(Theme::CurrentPalette().error, "[DISCONNECTED]");
     }
 
     ImGui::SameLine();
@@ -148,24 +149,24 @@ void SerialMonitor::render_output_area() {
     // Display messages
     for (const auto& msg : m_messages) {
         // Set color based on message type
-        ImU32 color = IM_COL32(255, 255, 255, 255);
+        ImU32 color = Theme::U32(Theme::CurrentPalette().text);
         const char* prefix = "";
 
         switch (msg.type) {
             case SerialMessage::Type::Rx:
-                color = IM_COL32(100, 200, 255, 255);
+                color = Theme::U32(Theme::CurrentPalette().primary);
                 prefix = "[RX] ";
                 break;
             case SerialMessage::Type::Tx:
-                color = IM_COL32(255, 200, 100, 255);
+                color = Theme::U32(Theme::CurrentPalette().warning);
                 prefix = "[TX] ";
                 break;
             case SerialMessage::Type::Info:
-                color = IM_COL32(150, 150, 150, 255);
+                color = Theme::U32(Theme::WithAlpha(Theme::CurrentPalette().textDim, 0.78f));
                 prefix = "[INFO] ";
                 break;
             case SerialMessage::Type::Error:
-                color = IM_COL32(255, 100, 100, 255);
+                color = Theme::U32(Theme::WithAlpha(Theme::CurrentPalette().error, 1.0f));
                 prefix = "[ERROR] ";
                 break;
         }

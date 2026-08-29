@@ -52,7 +52,7 @@ public:
     void set_model_editor(ModelEditor* editor) { m_model_editor = editor; }
 
 private:
-    void render_3d_viewport(Renderer& renderer, SimulationOrchestrator& orchestrator, ImVec2 total_size, float toolbar_height);
+    void render_3d_viewport(Renderer& renderer, SimulationOrchestrator& orchestrator);
     void render_circuit_editor_tab(SimulationOrchestrator& orchestrator);
     void render_code_editor_tab(SimulationOrchestrator& orchestrator);
     void render_model_editor_tab(SimulationOrchestrator& orchestrator);

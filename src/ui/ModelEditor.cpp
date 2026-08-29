@@ -4,6 +4,7 @@
 #include "core/Component.hpp"
 #include "core/SystemConfig.hpp"
 #include <imgui.h>
+#include "Theme.hpp"
 #include <imgui_internal.h>
 #include <filesystem>
 #include <GL/glew.h>
@@ -762,7 +763,7 @@ void ModelEditor::render_2d_view(int pw, int ph) {
         if (fi < tris.size()) {
             const auto& t = tris[fi];
             ImVec2 a = to2d(verts[t.v0]), b = to2d(verts[t.v1]), c = to2d(verts[t.v2]);
-            dl->AddTriangleFilled(a, b, c, IM_COL32(255, 130, 40, 100));
+            dl->AddTriangleFilled(a, b, c, Theme::U32(Theme::WithAlpha(Theme::CurrentPalette().primary, 0.39f)));
         }
     }
 
@@ -771,16 +772,16 @@ void ModelEditor::render_2d_view(int pw, int ph) {
         ImVec2 a = to2d(verts[t.v0]);
         ImVec2 b = to2d(verts[t.v1]);
         ImVec2 c = to2d(verts[t.v2]);
-        dl->AddLine(a, b, IM_COL32(180, 180, 190, 100), 1.0f);
-        dl->AddLine(b, c, IM_COL32(180, 180, 190, 100), 1.0f);
-        dl->AddLine(c, a, IM_COL32(180, 180, 190, 100), 1.0f);
+        dl->AddLine(a, b, Theme::U32(Theme::WithAlpha(Theme::CurrentPalette().borderStrong, 0.39f)), 1.0f);
+        dl->AddLine(b, c, Theme::U32(Theme::WithAlpha(Theme::CurrentPalette().borderStrong, 0.39f)), 1.0f);
+        dl->AddLine(c, a, Theme::U32(Theme::WithAlpha(Theme::CurrentPalette().borderStrong, 0.39f)), 1.0f);
     }
 
     // Highlight selected edges
     for (const auto& ek : m_edit_mesh.selected_edges()) {
         if (ek.v0 < verts.size() && ek.v1 < verts.size()) {
             ImVec2 a = to2d(verts[ek.v0]), b = to2d(verts[ek.v1]);
-            dl->AddLine(a, b, IM_COL32(255, 130, 40, 220), 3.0f);
+            dl->AddLine(a, b, Theme::U32(Theme::WithAlpha(Theme::CurrentPalette().primary, 0.86f)), 3.0f);
         }
     }
 
@@ -789,11 +790,11 @@ void ModelEditor::render_2d_view(int pw, int ph) {
         ImVec2 p = to2d(verts[i]);
         ImU32 col;
         if (sm == SelectMode::Vertex && m_edit_mesh.is_vertex_selected((uint32_t)i))
-            col = IM_COL32(255, 220, 80, 240);
+            col = Theme::U32(Theme::WithAlpha(Theme::CurrentPalette().primary, 0.94f));
         else if (sm == SelectMode::Edge || sm == SelectMode::Face)
-            col = IM_COL32(140, 170, 200, 150);
+            col = Theme::U32(Theme::WithAlpha(Theme::CurrentPalette().textDim, 0.59f));
         else
-            col = IM_COL32(120, 180, 255, 180);
+            col = Theme::U32(Theme::WithAlpha(Theme::CurrentPalette().primary, 0.71f));
         dl->AddCircleFilled(p, 3.5f, col);
     }
 
@@ -831,7 +832,7 @@ void ModelEditor::render_2d_view(int pw, int ph) {
 
     // Circle select
     if (hov && m_active_tool == 2) {
-        dl->AddCircle(mp, m_circle_radius, IM_COL32(255, 220, 80, 180), 48, 1.5f);
+        dl->AddCircle(mp, m_circle_radius, Theme::U32(Theme::WithAlpha(Theme::CurrentPalette().primary, 0.71f)), 48, 1.5f);
         if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
             if (!m_selection_started) {
                 m_selection_started = true;
@@ -895,7 +896,7 @@ void ModelEditor::render_2d_view(int pw, int ph) {
         for (size_t i = 1; i < m_lasso_points.size(); ++i) {
             dl->AddLine(ImVec2(m_lasso_points[i - 1][0], m_lasso_points[i - 1][1]),
                         ImVec2(m_lasso_points[i][0], m_lasso_points[i][1]),
-                        IM_COL32(255, 220, 80, 210), 1.5f);
+                        Theme::U32(Theme::WithAlpha(Theme::CurrentPalette().primary, 0.82f)), 1.5f);
         }
     }
 
@@ -959,7 +960,7 @@ void ModelEditor::render_2d_view(int pw, int ph) {
     if (m_box_selecting && hov) {
         ImVec2 bs(m_box_start[0], m_box_start[1]);
         ImVec2 be(m_box_end[0], m_box_end[1]);
-        dl->AddRect(bs, be, IM_COL32(255, 220, 80, 180), 0.0f, 0, 1.5f);
+        dl->AddRect(bs, be, Theme::U32(Theme::WithAlpha(Theme::CurrentPalette().primary, 0.71f)), 0.0f, 0, 1.5f);
     }
 
     ImGui::EndChild();
@@ -996,22 +997,22 @@ void ModelEditor::render_toolbar() {
     ImGui::SameLine();
 
     // Tool buttons
-    ImGui::PushStyleColor(ImGuiCol_Button, m_active_tool == 0 ? ImVec4(0.4f, 0.6f, 0.9f, 1) : ImVec4(0.3f, 0.3f, 0.35f, 1));
+    ImGui::PushStyleColor(ImGuiCol_Button, m_active_tool == 0 ? Theme::CurrentPalette().primary : Theme::CurrentPalette().surfaceActive);
     if (ImGui::Button("Select")) m_active_tool = 0;
     ImGui::PopStyleColor();
     ImGui::SameLine();
 
-    ImGui::PushStyleColor(ImGuiCol_Button, m_active_tool == 1 ? ImVec4(0.4f, 0.6f, 0.9f, 1) : ImVec4(0.3f, 0.3f, 0.35f, 1));
+    ImGui::PushStyleColor(ImGuiCol_Button, m_active_tool == 1 ? Theme::CurrentPalette().primary : Theme::CurrentPalette().surfaceActive);
     if (ImGui::Button("Box Sel")) m_active_tool = 1;
     ImGui::PopStyleColor();
     ImGui::SameLine();
 
-    ImGui::PushStyleColor(ImGuiCol_Button, m_active_tool == 2 ? ImVec4(0.4f, 0.6f, 0.9f, 1) : ImVec4(0.3f, 0.3f, 0.35f, 1));
+    ImGui::PushStyleColor(ImGuiCol_Button, m_active_tool == 2 ? Theme::CurrentPalette().primary : Theme::CurrentPalette().surfaceActive);
     if (ImGui::Button("Circle Sel")) m_active_tool = 2;
     ImGui::PopStyleColor();
     ImGui::SameLine();
 
-    ImGui::PushStyleColor(ImGuiCol_Button, m_active_tool == 3 ? ImVec4(0.4f, 0.6f, 0.9f, 1) : ImVec4(0.3f, 0.3f, 0.35f, 1));
+    ImGui::PushStyleColor(ImGuiCol_Button, m_active_tool == 3 ? Theme::CurrentPalette().primary : Theme::CurrentPalette().surfaceActive);
     if (ImGui::Button("Lasso")) m_active_tool = 3;
     ImGui::PopStyleColor();
     ImGui::SameLine();
@@ -1340,7 +1341,7 @@ void ModelEditor::render_status_bar() {
 
     if (!m_error.empty()) {
         ImGui::SameLine();
-        ImGui::TextColored(ImVec4(1, 0.3f, 0.3f, 1), "  Err: %s", m_error.c_str());
+        ImGui::TextColored(Theme::CurrentPalette().error, "  Err: %s", m_error.c_str());
     }
 }
 
@@ -1616,30 +1617,30 @@ void ModelEditor::render(SimulationOrchestrator& orchestrator) {
             ImGui::Dummy(ImVec2((float)pw, (float)ph));
             ImVec2 rmin = ImGui::GetItemRectMin();
             ImVec2 rmax = ImGui::GetItemRectMax();
-            overlay->AddRectFilled(rmin, rmax, IM_COL32(18, 18, 20, 255));
+            overlay->AddRectFilled(rmin, rmax, Theme::U32(Theme::CurrentPalette().bg));
             const float step = 24.0f;
             for (float x = rmin.x; x < rmax.x; x += step)
-                overlay->AddLine(ImVec2(x, rmin.y), ImVec2(x, rmax.y), IM_COL32(40, 45, 55, 120));
+                overlay->AddLine(ImVec2(x, rmin.y), ImVec2(x, rmax.y), Theme::U32(Theme::WithAlpha(Theme::CurrentPalette().border, 0.47f)));
             for (float y = rmin.y; y < rmax.y; y += step)
-                overlay->AddLine(ImVec2(rmin.x, y), ImVec2(rmax.x, y), IM_COL32(40, 45, 55, 120));
+                overlay->AddLine(ImVec2(rmin.x, y), ImVec2(rmax.x, y), Theme::U32(Theme::WithAlpha(Theme::CurrentPalette().border, 0.47f)));
             overlay->AddText(ImVec2(rmin.x + 10.0f, rmin.y + 10.0f),
-                             IM_COL32(255, 110, 110, 220),
+                             Theme::U32(Theme::WithAlpha(Theme::CurrentPalette().error, 0.86f)),
                              "3D viewport unavailable (framebuffer not ready).");
         }
         bool hov = ImGui::IsItemHovered();
         ImVec2 rect_min = ImGui::GetItemRectMin();
         ImVec2 rect_max = ImGui::GetItemRectMax();
         overlay->AddText(ImVec2(rect_min.x + 8.0f, rect_min.y + 8.0f),
-                         IM_COL32(210, 220, 235, 220),
+                         Theme::U32(Theme::WithAlpha(Theme::CurrentPalette().text, 0.86f)),
                          ("Edit Mesh 3D - " + m_loaded_mesh_source_label).c_str());
         if (m_edit_loaded) {
             char stats[128];
             snprintf(stats, sizeof(stats), "V:%zu E:%zu F:%zu",
                      m_edit_mesh.vertex_count(), m_edit_mesh.edge_count(), m_edit_mesh.triangle_count());
             overlay->AddText(ImVec2(rect_min.x + 8.0f, rect_min.y + 28.0f),
-                             IM_COL32(160, 175, 195, 210), stats);
+                             Theme::U32(Theme::WithAlpha(Theme::CurrentPalette().textDim, 0.82f)), stats);
         }
-        overlay->AddRect(rect_min, rect_max, IM_COL32(70, 105, 150, 180));
+        overlay->AddRect(rect_min, rect_max, Theme::U32(Theme::WithAlpha(Theme::CurrentPalette().primary, 0.71f)));
 
         // Camera orbit (RMB drag)
         if (hov && ImGui::IsMouseDragging(ImGuiMouseButton_Right)) {
@@ -1661,7 +1662,7 @@ void ModelEditor::render(SimulationOrchestrator& orchestrator) {
         }
         ImVec2 mp = ImGui::GetMousePos();
         if (hov && m_active_tool == 2) {
-            ImGui::GetWindowDrawList()->AddCircle(mp, m_circle_radius, IM_COL32(255, 220, 80, 180), 48, 1.5f);
+            ImGui::GetWindowDrawList()->AddCircle(mp, m_circle_radius, Theme::U32(Theme::WithAlpha(Theme::CurrentPalette().primary, 0.71f)), 48, 1.5f);
             if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
                 if (!m_selection_started) {
                     m_selection_started = true;
@@ -1723,7 +1724,7 @@ void ModelEditor::render(SimulationOrchestrator& orchestrator) {
             for (size_t i = 1; i < m_lasso_points.size(); ++i) {
                 overlay->AddLine(ImVec2(rect_min.x + m_lasso_points[i - 1][0], rect_min.y + m_lasso_points[i - 1][1]),
                                  ImVec2(rect_min.x + m_lasso_points[i][0], rect_min.y + m_lasso_points[i][1]),
-                                 IM_COL32(255, 220, 80, 210), 1.5f);
+                                 Theme::U32(Theme::WithAlpha(Theme::CurrentPalette().primary, 0.82f)), 1.5f);
             }
         }
 
@@ -1791,7 +1792,7 @@ void ModelEditor::render(SimulationOrchestrator& orchestrator) {
             }
             ImVec2 bs(rect_min.x + m_box_start[0], rect_min.y + m_box_start[1]);
             ImVec2 be(rect_min.x + m_box_end[0], rect_min.y + m_box_end[1]);
-            overlay->AddRect(bs, be, IM_COL32(255, 220, 80, 180), 0.0f, 0, 1.5f);
+            overlay->AddRect(bs, be, Theme::U32(Theme::WithAlpha(Theme::CurrentPalette().primary, 0.71f)), 0.0f, 0, 1.5f);
         }
     } else {
         // 2D view
@@ -1825,7 +1826,7 @@ void ModelEditor::render(SimulationOrchestrator& orchestrator) {
         m_vp.mesh_valid = false;
     }
     if (!m_preview_error.empty()) {
-        ImGui::TextColored(ImVec4(1, 0.35f, 0.35f, 1), "%s", m_preview_error.c_str());
+        ImGui::TextColored(Theme::CurrentPalette().error, "%s", m_preview_error.c_str());
     }
 
     // Add modifier combo
@@ -2171,7 +2172,7 @@ void ModelEditor::render(SimulationOrchestrator& orchestrator) {
     }
 
     if (!m_error.empty()) {
-        ImGui::TextColored(ImVec4(1, 0.3f, 0.3f, 1), "%s", m_error.c_str());
+        ImGui::TextColored(Theme::CurrentPalette().error, "%s", m_error.c_str());
     }
 
     ImGui::EndChild(); // Properties

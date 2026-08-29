@@ -1,6 +1,7 @@
 #include "PropertiesPanel.hpp"
 #include "SimulationOrchestrator.hpp"
 #include <imgui.h>
+#include "Theme.hpp"
 #include <algorithm>
 
 namespace mechatron {
@@ -115,12 +116,12 @@ void PropertiesPanel::render(SimulationOrchestrator& orchestrator) {
                 }
 
                 if (comp->physical_link_is_connected()) {
-                    ImGui::TextColored(ImVec4(0, 1, 0, 1), "Status: Connected");
+                    ImGui::TextColored(Theme::CurrentPalette().success, "Status: Connected");
                     if (ImGui::Button("Disconnect##PhysicalLink")) {
                         comp->physical_link_disconnect();
                     }
                 } else {
-                    ImGui::TextColored(ImVec4(1, 0.6f, 0, 1), "Status: Disconnected");
+                    ImGui::TextColored(Theme::CurrentPalette().warning, "Status: Disconnected");
                     if (port.empty()) {
                         ImGui::BeginDisabled();
                     }

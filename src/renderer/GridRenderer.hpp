@@ -42,9 +42,9 @@ public:
     void set_axes_visible(bool visible) { m_axes_visible = visible; }
     void set_grid_visible(bool visible) { m_grid_visible = visible; }
 
-    // Theme-configurable default grid color
+    // Theme-configurable default grid color (now tied to Theme:: border)
     static Vec3& default_grid_color() {
-        static Vec3 def{0.3f, 0.3f, 0.3f};
+        static Vec3 def{0.165f, 0.188f, 0.235f};
         return def;
     }
     static void set_default_grid_color(const Vec3& color) { default_grid_color() = color; }
